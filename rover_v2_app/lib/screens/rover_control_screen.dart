@@ -33,6 +33,9 @@ class _RoverControlScreenState extends State<RoverControlScreen>
   String _bearing = '--';
   double _speed = 0.0;
 
+  // ─── Motor Speed ──────────────────────────────────────────────────────────
+  double _motorSpeed = 130; // 50–255 PWM range sent to ESP32
+
   // ─── Animation ────────────────────────────────────────────────────────────
   late AnimationController _pulseController;
   late Animation<double> _pulseAnim;
@@ -200,12 +203,12 @@ class _RoverControlScreenState extends State<RoverControlScreen>
 
           const SizedBox(height: 12),
 
-          // ── Joystick Section ──────────────────────────────────────────────
+          // ── Joystick + Speed Slider ───────────────────────────────────────
           Expanded(
             child: Container(
               width: double.infinity,
               margin: const EdgeInsets.symmetric(horizontal: 24),
-              padding: const EdgeInsets.symmetric(vertical: 28),
+              padding: const EdgeInsets.fromLTRB(20, 20, 12, 20),
               decoration: BoxDecoration(
                 color: RoverTheme.surfaceContainerHigh.withOpacity(0.5),
                 borderRadius: BorderRadius.circular(28),
@@ -215,17 +218,44 @@ class _RoverControlScreenState extends State<RoverControlScreen>
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                    'JOYSTICK',
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(fontSize: 9, letterSpacing: 2),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'JOYSTICK',
+                        style: theme.textTheme.labelSmall
+                            ?.copyWith(fontSize: 9, letterSpacing: 2),
+                      ),
+                      const SizedBox(width: 40),
+                      const Text(
+                        'SPEED',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 2,
+                          color: RoverTheme.secondary,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 16),
 
-                  // ── Joystick Widget ──────────────────────────────────────
-                  _buildJoystick(),
+                  // ── Joystick + Vertical Slider side-by-side ───────────────
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // Joystick
+                      _buildJoystick(),
 
-                  const SizedBox(height: 32),
+                      const SizedBox(width: 12),
+
+                      // Vertical speed slider
+                      _buildVerticalSpeedSlider(),
+                    ],
+                  ),
+
+                  const SizedBox(height: 24),
 
                   // ── Metrics Row ──────────────────────────────────────────
                   Row(
@@ -236,8 +266,7 @@ class _RoverControlScreenState extends State<RoverControlScreen>
                       Container(
                         height: 44,
                         width: 1,
-                        color:
-                            RoverTheme.outlineVariant.withOpacity(0.4),
+                        color: RoverTheme.outlineVariant.withOpacity(0.4),
                         margin:
                             const EdgeInsets.symmetric(horizontal: 32),
                       ),
@@ -515,6 +544,99 @@ class _RoverControlScreenState extends State<RoverControlScreen>
           ),
         ),
       ],
+    );
+  }
+
+  // ─── Vertical Speed Slider ────────────────────────────────────────────────
+
+  Widget _buildVerticalSpeedSlider() {
+    // Height matches joystick diameter
+    const sliderHeight = _joystickRadius * 2;
+    final pct = ((_motorSpeed - 50) / (255 - 50)).clamp(0.0, 1.0);
+
+    return SizedBox(
+      width: 60,
+      height: sliderHeight,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Value badge (top)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: RoverTheme.primary.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              '${_motorSpeed.round()}',
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                color: RoverTheme.primary,
+              ),
+            ),
+          ),
+
+          // Rotated slider (fills remaining space)
+          Expanded(
+            child: Center(
+              child: RotatedBox(
+                quarterTurns: 3, // bottom = min, top = max
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    activeTrackColor: RoverTheme.primary,
+                    inactiveTrackColor:
+                        RoverTheme.outlineVariant.withOpacity(0.35),
+                    thumbColor: RoverTheme.primary,
+                    overlayColor: RoverTheme.primary.withOpacity(0.12),
+                    trackHeight: 5,
+                    thumbShape:
+                        const RoundSliderThumbShape(enabledThumbRadius: 10),
+                  ),
+                  child: Slider(
+                    value: _motorSpeed,
+                    min: 50,
+                    max: 255,
+                    divisions: 41,
+                    onChanged: (val) {
+                      setState(() => _motorSpeed = val);
+                    },
+                    onChangeEnd: (val) {
+                      _mqtt.publish('speed:${val.round()}');
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // Speed label chip (bottom)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: RoverTheme.surfaceContainerHighest.withOpacity(0.6),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              pct < 0.35
+                  ? 'SLOW'
+                  : pct < 0.70
+                      ? 'MED'
+                      : 'FAST',
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
+                color: pct < 0.35
+                    ? Colors.green
+                    : pct < 0.70
+                        ? Colors.orange
+                        : Colors.red,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

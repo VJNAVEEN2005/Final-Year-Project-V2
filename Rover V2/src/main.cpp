@@ -199,7 +199,8 @@ void mqttCallback(char *topic, byte *payload, unsigned int len)
     stopAll();
   else if (msg.startsWith("speed:"))
   {
-    // motorSpeed = constrain(msg.substring(6).toInt(), 0, 255); // Disabled to keep fixed slow speed
+    motorSpeed = constrain(msg.substring(6).toInt(), 50, 255);
+    Serial.println("Speed set to: " + String(motorSpeed));
   }
   else if (msg.startsWith("move:"))
   {
