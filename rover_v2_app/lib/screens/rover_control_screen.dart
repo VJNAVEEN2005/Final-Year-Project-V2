@@ -434,7 +434,7 @@ class _RoverControlScreenState extends State<RoverControlScreen>
     return Container(
       height: 80,
       decoration: BoxDecoration(color: RoverTheme.background.withOpacity(0.95), border: const Border(top: BorderSide(color: RoverTheme.outlineVariant, width: 0.5)), borderRadius: const BorderRadius.vertical(top: Radius.circular(20))),
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_buildNavItem(context, Icons.sensors, 'STATUS', route: '/status'), _buildNavItem(context, Icons.videogame_asset, 'CONTROL', route: '/control', active: true), _buildNavItem(context, Icons.auto_awesome, 'AI', route: '/ai'), _buildNavItem(context, Icons.settings, 'SETTINGS', route: '/settings')]),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_buildNavItem(context, Icons.sensors, 'STATUS', route: '/status'), _buildNavItem(context, Icons.videogame_asset, 'CONTROL', route: '/control', active: true), _buildNavItem(context, Icons.map_rounded, 'MAPS', route: '/maps'), _buildNavItem(context, Icons.auto_awesome, 'AI', route: '/ai'), _buildNavItem(context, Icons.settings, 'SETTINGS', route: '/settings')]),
     );
   }
 

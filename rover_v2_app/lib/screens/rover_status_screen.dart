@@ -24,6 +24,7 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
   // ─── Telemetry ────────────────────────────────────────────────────────────
   double _obstacleDistCm = 0;
   bool _obstacleDetected = false;
+  double _distanceCoveredCm = 0;
 
   // ─── Animations ───────────────────────────────────────────────────────────
   late AnimationController _pulseController;
@@ -93,6 +94,13 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
           setState(() {
             _obstacleDistCm = obs;
             _obstacleDetected = obs > 0 && obs < 15;
+          });
+        }
+      } else if (part.startsWith('dist:')) {
+        final dist = double.tryParse(part.substring(5));
+        if (dist != null && mounted) {
+          setState(() {
+            _distanceCoveredCm = dist;
           });
         }
       }
@@ -214,7 +222,7 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
                     _obstacleDistCm > 0
                         ? '${_obstacleDistCm.toStringAsFixed(1)} cm'
                         : '--'),
-                _buildTelemetryItem(Icons.storage, 'CMD TOPIC', 'rover/cmd'),
+                _buildTelemetryItem(Icons.route, 'DIST COVERED', '${_distanceCoveredCm.toStringAsFixed(1)} cm'),
               ],
             ),
           ],

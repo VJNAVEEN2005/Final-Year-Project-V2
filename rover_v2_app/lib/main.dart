@@ -5,13 +5,12 @@ import 'screens/rover_status_screen.dart';
 import 'screens/rover_control_screen.dart';
 import 'screens/rover_settings_screen.dart';
 import 'screens/ai_assistant_screen.dart';
+import 'screens/map_gallery_screen.dart';
 import 'theme/rover_theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-  ]);
+  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -36,6 +35,7 @@ class RoverApp extends StatelessWidget {
         '/control': (context) => const RoverControlScreen(),
         '/ai': (context) => const AiAssistantScreen(),
         '/settings': (context) => const RoverSettingsScreen(),
+        '/maps': (context) => const MapGalleryScreen(),
       },
     );
   }

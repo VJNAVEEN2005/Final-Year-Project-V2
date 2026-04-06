@@ -1,10 +1,11 @@
-#include <Arduino.h>
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <PubSubClient.h>
-#include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
+#include <Arduino.h>
+#include <PubSubClient.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <Wire.h>
+
 
 // ===== WIFI =====
 const char *ssid = "Nothing Phone (2a)";
@@ -56,7 +57,8 @@ MrY=
 // ===== MOTOR PINS - Driver B (Right) =====
 #define PWMC 33
 #define CIN1 32
-#define CIN2 2
+#define CIN2 15 // FC-03 Front-Right CIN2 pin
+
 #define PWMD 18
 #define DIN1 19
 #define DIN2 23
@@ -64,6 +66,15 @@ MrY=
 // ===== SENSORS =====
 #define TRIG_PIN 5
 #define ECHO_PIN 4
+#define ENC_PIN 35 // FC-03 Optical Encoder D0 pin
+
+volatile unsigned long encPulseCount = 0;
+volatile unsigned long totalPulses = 0;
+
+void IRAM_ATTR encISR() {
+  encPulseCount++;
+  totalPulses++;
+}
 
 // ===== OLED =====
 #define OLED_SDA 21
@@ -80,53 +91,48 @@ Adafruit_SH1106G display(128, 64, &Wire, -1);
 float distanceCm = 0;
 int motorSpeed = 50; // User-requested default speed (50-255 range)
 String currentCmd = "stop";
-const float SPEED_CM_S_MAX = 220.0; // Calibrated: rover moved 11x too far at 20.0, so 20*11=220
+const float SPEED_CM_S_MAX =
+    220.0; // Calibrated: rover moved 11x too far at 20.0, so 20*11=220
 
 WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
 
 // ===== MOTOR HELPERS =====
-void setMotor(int ch, int in1, int in2, int spd, bool fwd)
-{
+void setMotor(int ch, int in1, int in2, int spd, bool fwd) {
   digitalWrite(in1, fwd ? HIGH : LOW);
   digitalWrite(in2, fwd ? LOW : HIGH);
   ledcWrite(ch, spd);
 }
 
-void stopAll()
-{
+void stopAll() {
   ledcWrite(CH_FL, 0);
   ledcWrite(CH_RL, 0);
   ledcWrite(CH_FR, 0);
   ledcWrite(CH_RR, 0);
 }
 
-void moveForward(int s)
-{
+void moveForward(int s) {
   setMotor(CH_FL, AIN1, AIN2, s, true);
   setMotor(CH_RL, BIN1, BIN2, s, true);
   setMotor(CH_FR, CIN1, CIN2, s, true);
   setMotor(CH_RR, DIN1, DIN2, s, true);
 }
 
-void moveBackward(int s)
-{
+void moveBackward(int s) {
   setMotor(CH_FL, AIN1, AIN2, s, false);
   setMotor(CH_RL, BIN1, BIN2, s, false);
   setMotor(CH_FR, CIN1, CIN2, s, false);
   setMotor(CH_RR, DIN1, DIN2, s, false);
 }
 
-void turnLeft(int s)
-{
+void turnLeft(int s) {
   setMotor(CH_FL, AIN1, AIN2, s, false);
   setMotor(CH_RL, BIN1, BIN2, s, false);
   setMotor(CH_FR, CIN1, CIN2, s, true);
   setMotor(CH_RR, DIN1, DIN2, s, true);
 }
 
-void turnRight(int s)
-{
+void turnRight(int s) {
   setMotor(CH_FL, AIN1, AIN2, s, true);
   setMotor(CH_RL, BIN1, BIN2, s, true);
   setMotor(CH_FR, CIN1, CIN2, s, false);
@@ -134,8 +140,7 @@ void turnRight(int s)
 }
 
 // ===== ULTRASONIC =====
-float getDistance()
-{
+float getDistance() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
   digitalWrite(TRIG_PIN, HIGH);
@@ -146,8 +151,7 @@ float getDistance()
 }
 
 // ===== OLED =====
-void updateOLED(float obs)
-{
+void updateOLED(float obs) {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SH110X_WHITE);
@@ -167,12 +171,10 @@ void updateOLED(float obs)
 }
 
 // ===== MQTT CALLBACK =====
-void mqttCallback(char *topic, byte *payload, unsigned int len)
-{
+void mqttCallback(char *topic, byte *payload, unsigned int len) {
   (void)topic;
   String msg = "";
-  for (unsigned int i = 0; i < len; i++)
-  {
+  for (unsigned int i = 0; i < len; i++) {
     msg += (char)payload[i];
   }
   msg.trim();
@@ -189,33 +191,35 @@ void mqttCallback(char *topic, byte *payload, unsigned int len)
     turnRight(motorSpeed);
   else if (msg == "stop")
     stopAll();
-  else if (msg.startsWith("speed:"))
-  {
+  else if (msg.startsWith("speed:")) {
     motorSpeed = constrain(msg.substring(6).toInt(), 50, 255);
     Serial.println("Speed set to: " + String(motorSpeed));
-  }
-  else if (msg.startsWith("move:"))
-  {
+  } else if (msg.startsWith("move:")) {
     float targetCm = msg.substring(5).toFloat();
+    float cmPerPulse = (PI * 6.6) / 20.0; // 66mm diameter, 20 slots
+    unsigned long targetPulses = (unsigned long)(targetCm / cmPerPulse);
+    if (targetPulses == 0) targetPulses = 1; // Minimum 1 pulse
+
+    // Timeout safety fallback (assume 10cm/s minimum speed)
     float estimatedSpeed = (motorSpeed / 255.0f) * SPEED_CM_S_MAX;
-    if (estimatedSpeed <= 0) estimatedSpeed = 1.0f; // safety
+    if (estimatedSpeed <= 0) estimatedSpeed = 10.0f;
+    long timeoutMs = (long)((targetCm / estimatedSpeed) * 1000.0f) + 3000; 
     
-    long durationMs = (long)((targetCm / estimatedSpeed) * 1000.0f);
+    encPulseCount = 0;
     unsigned long startTime = millis();
-    
-    Serial.println("Moving " + String(targetCm) + "cm for " + String(durationMs) + "ms");
+
+    Serial.println("Moving " + String(targetCm) + "cm, target pulses: " + 
+                   String(targetPulses) + ", timeout: " + String(timeoutMs) + "ms");
     moveForward(motorSpeed);
-    
-    while (millis() - startTime < (unsigned long)durationMs)
-    {
+
+    while (encPulseCount < targetPulses && (millis() - startTime < (unsigned long)timeoutMs)) {
       float obs = getDistance();
-      if (obs > 0 && obs < 15)
-      {
+      if (obs > 0 && obs < 15) {
         stopAll();
         mqttClient.publish(topic_data, "obstacle_detected");
         return;
       }
-      delay(20);
+      delay(10);
       mqttClient.loop(); // keep alive
     }
     stopAll();
@@ -223,18 +227,17 @@ void mqttCallback(char *topic, byte *payload, unsigned int len)
   }
 }
 
+
 // ===== WIFI WATCHDOG =====
-void checkWiFiWatchdog()
-{
-  if (WiFi.status() != WL_CONNECTED)
-  {
+void checkWiFiWatchdog() {
+  if (WiFi.status() != WL_CONNECTED) {
     stopAll(); // Securely stop motors
     Serial.print("WiFi dropped. Reconnecting...");
     WiFi.disconnect();
     WiFi.begin(ssid, password);
     unsigned long startAttemptTime = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000)
-    {
+    while (WiFi.status() != WL_CONNECTED &&
+           millis() - startAttemptTime < 10000) {
       delay(500);
       Serial.print(".");
     }
@@ -247,37 +250,32 @@ void checkWiFiWatchdog()
 }
 
 // ===== MQTT WATCHDOG =====
-void reconnectMQTT()
-{
+void reconnectMQTT() {
   stopAll(); // Auto stop motors while MQTT is reconnecting
-  while (!mqttClient.connected())
-  {
+  while (!mqttClient.connected()) {
     checkWiFiWatchdog();
     if (WiFi.status() != WL_CONNECTED) {
       delay(3000);
       continue;
     }
-    
+
     Serial.print("Connecting EMQX...");
     String id = "ESP32Rover-" + String(random(0xffff), HEX);
 
-    // LWT built into connect(): broker auto-publishes "offline" (retained) if ESP32 drops
-    if (mqttClient.connect(
-          id.c_str(),
-          mqtt_username, mqtt_password,
-          topic_status,   // will topic
-          1,              // will QoS (at least once)
-          true,           // will retain
-          "offline"       // will message
-        ))
-    {
+    // LWT built into connect(): broker auto-publishes "offline" (retained) if
+    // ESP32 drops
+    if (mqttClient.connect(id.c_str(), mqtt_username, mqtt_password,
+                           topic_status, // will topic
+                           1,            // will QoS (at least once)
+                           true,         // will retain
+                           "offline"     // will message
+                           )) {
       Serial.println("connected");
       mqttClient.subscribe(topic_cmd);
-      // Announce rover is online (retained — new subscribers get it immediately)
+      // Announce rover is online (retained — new subscribers get it
+      // immediately)
       mqttClient.publish(topic_status, "online", true);
-    }
-    else
-    {
+    } else {
       Serial.print("failed rc=");
       Serial.println(mqttClient.state());
       delay(3000);
@@ -286,14 +284,12 @@ void reconnectMQTT()
 }
 
 // ===== SETUP =====
-void setup()
-{
+void setup() {
   Serial.begin(115200);
 
   // Motor direction pins
   int dirPins[] = {AIN1, AIN2, BIN1, BIN2, CIN1, CIN2, DIN1, DIN2};
-  for (int p : dirPins)
-  {
+  for (int p : dirPins) {
     pinMode(p, OUTPUT);
   }
 
@@ -310,6 +306,10 @@ void setup()
   // Sensors
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
+  
+  // Optical Encoder FC-03
+  pinMode(ENC_PIN, INPUT);
+  attachInterrupt(digitalPinToInterrupt(ENC_PIN), encISR, RISING);
 
   // OLED
   Wire.begin(OLED_SDA, OLED_SCL);
@@ -322,8 +322,7 @@ void setup()
   WiFi.setSleep(false);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   Serial.print("WiFi connecting");
-  while (WiFi.status() != WL_CONNECTED)
-  {
+  while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
@@ -341,11 +340,9 @@ void setup()
 // ===== LOOP =====
 unsigned long lastPub = 0;
 
-void loop()
-{
+void loop() {
   checkWiFiWatchdog();
-  if (!mqttClient.connected())
-  {
+  if (!mqttClient.connected()) {
     reconnectMQTT();
   }
   mqttClient.loop();
@@ -353,17 +350,17 @@ void loop()
   float obs = getDistance();
 
   // Auto obstacle stop
-  if (obs > 0 && obs < 15 && currentCmd == "forward")
-  {
+  if (obs > 0 && obs < 15 && currentCmd == "forward") {
     stopAll();
     currentCmd = "stop";
     mqttClient.publish(topic_data, "obstacle_detected");
   }
 
   // Publish every 500ms
-  if (millis() - lastPub > 500)
-  {
-    String data = "dist:" + String(distanceCm, 1) + ",obs:" + String(obs, 1);
+  if (millis() - lastPub > 500) {
+    float cmPerPulse = (PI * 6.6) / 20.0;
+    float currentDist = totalPulses * cmPerPulse;
+    String data = "dist:" + String(currentDist, 1) + ",obs:" + String(obs, 1);
     mqttClient.publish(topic_data, data.c_str());
     lastPub = millis();
   }

@@ -1,0 +1,55 @@
+﻿Running Gradle task 'assembleRelease'...                        
+Font asset "MaterialIcons-Regular.otf" was tree-shaken, reducing it from 1645184 to 11388 bytes (99.3% reduction). Tree-shaking can be disabled by providing the --no-tree-shake-icons flag when building your app.
+flutter : 
+At line:1 char:1
++ flutter build apk 2>&1 
+| Out-File 
+build_output.txt
++ ~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (:  
+  String) [], RemoteExc   
+ eption
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+FAILURE: Build failed 
+with an exception.
+
+* What went wrong:
+Execution failed for task 
+':ar_flutter_plugin:compil
+eReleaseKotlin'.
+> Inconsistent JVM-target 
+compatibility detected 
+for tasks 'compileReleaseJ
+avaWithJavac' (1.8) and 
+'compileReleaseKotlin' 
+(21).
+
+  Consider using JVM 
+Toolchain: https://kotl.in
+/gradle/jvm/toolchain
+  Learn more about 
+JVM-target validation: htt
+ps://kotl.in/gradle/jvm/ta
+rget-validation 
+
+* Try:
+> Run with --stacktrace 
+option to get the stack 
+trace.
+> Run with --info or 
+--debug option to get 
+more log output.
+> Run with --scan to get 
+full insights.
+> Get more help at 
+https://help.gradle.org.
+
+BUILD FAILED in 55s
+Running Gradle task 'assembleRelease'...                           55.6s
+Gradle task 
+assembleRelease failed 
+with exit code 1
