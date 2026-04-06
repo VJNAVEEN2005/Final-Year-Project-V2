@@ -196,8 +196,20 @@ void mqttCallback(char *topic, byte *payload, unsigned int len) {
     Serial.println("Speed set to: " + String(motorSpeed));
   } else if (msg.startsWith("move:")) {
     float targetCm = msg.substring(5).toFloat();
-    float cmPerPulse = (PI * 6.6) / 20.0; // 66mm diameter, 20 slots
-    unsigned long targetPulses = (unsigned long)(targetCm / cmPerPulse);
+    
+    // ALGEBRAIC CALIBRATION BASED ON USER DATA:
+    // 20 pulses -> 14 cm
+    // 40 pulses -> 25 cm
+    // Distance = (cwPerPulse * pulses) + drift
+    // 11cm difference = 20 pulses --> cmPerPulse = 0.55 cm
+    // Drift (sliding after stop) = 3.0 cm
+    float cmPerPulse = 0.55; 
+    float driftCm = 3.0;
+    
+    float adjustedTarget = targetCm - driftCm;
+    if (adjustedTarget <= 0) adjustedTarget = targetCm / 2.0; // prevent 0 or negative pulses
+    
+    unsigned long targetPulses = (unsigned long)(adjustedTarget / cmPerPulse);
     if (targetPulses == 0) targetPulses = 1; // Minimum 1 pulse
 
     // Timeout safety fallback (assume 10cm/s minimum speed)
@@ -212,6 +224,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int len) {
                    String(targetPulses) + ", timeout: " + String(timeoutMs) + "ms");
     moveForward(motorSpeed);
 
+    unsigned long lastPrintCount = 0;
     while (encPulseCount < targetPulses && (millis() - startTime < (unsigned long)timeoutMs)) {
       float obs = getDistance();
       if (obs > 0 && obs < 15) {
@@ -219,9 +232,23 @@ void mqttCallback(char *topic, byte *payload, unsigned int len) {
         mqttClient.publish(topic_data, "obstacle_detected");
         return;
       }
+      
+      // Print pulse count every time it changes so we can see if the sensor works
+      if (encPulseCount != lastPrintCount) {
+        Serial.println("Pulses: " + String(encPulseCount) + " / " + String(targetPulses));
+        lastPrintCount = encPulseCount;
+      }
+
       delay(10);
       mqttClient.loop(); // keep alive
     }
+    
+    if (encPulseCount < targetPulses) {
+      Serial.println("WARNING: Stopped due to safety TIMEOUT! The sensor did NOT send enough pulses.");
+    } else {
+      Serial.println("SUCCESS: Target distance reached properly via encoder.");
+    }
+    
     stopAll();
     mqttClient.publish(topic_data, "movement_done");
   }
@@ -358,7 +385,7 @@ void loop() {
 
   // Publish every 500ms
   if (millis() - lastPub > 500) {
-    float cmPerPulse = (PI * 6.6) / 20.0;
+    float cmPerPulse = 0.55; 
     float currentDist = totalPulses * cmPerPulse;
     String data = "dist:" + String(currentDist, 1) + ",obs:" + String(obs, 1);
     mqttClient.publish(topic_data, data.c_str());
