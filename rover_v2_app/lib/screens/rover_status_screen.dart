@@ -670,6 +670,8 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
               route: '/status', active: true),
           _buildNavItem(context, Icons.videogame_asset, 'CONTROL',
               route: '/control'),
+          _buildNavItem(context, Icons.auto_awesome, 'AI',
+              route: '/ai'),
           _buildNavItem(context, Icons.settings, 'SETTINGS',
               route: '/settings'),
         ],

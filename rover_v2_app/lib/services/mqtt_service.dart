@@ -28,10 +28,12 @@ class MqttService {
   final _dataCtrl  = StreamController<String>.broadcast();
   final _connCtrl  = StreamController<bool>.broadcast();
   final _roverCtrl = StreamController<bool>.broadcast();
+  final _doneCtrl  = StreamController<void>.broadcast();
 
   Stream<String> get dataStream        => _dataCtrl.stream;
   Stream<bool>   get connectionStream  => _connCtrl.stream;
   Stream<bool>   get roverStatusStream => _roverCtrl.stream;
+  Stream<void>   get doneStream        => _doneCtrl.stream;
   bool get isConnected   => _isConnected;
   bool get isRoverOnline => _isRoverOnline;
 
@@ -94,7 +96,9 @@ class MqttService {
             (m.payload as MqttPublishMessage).payload.message);
         debugPrint('[MQTT] ← ${m.topic}: $payload');
         if (m.topic == topicData) {
-          _dataCtrl.add(payload);
+          final p = payload.trim();
+          _dataCtrl.add(p);
+          if (p == 'done') _doneCtrl.add(null);
         } else if (m.topic == topicStatus) {
           _isRoverOnline = payload.trim() == 'online';
           _roverCtrl.add(_isRoverOnline);

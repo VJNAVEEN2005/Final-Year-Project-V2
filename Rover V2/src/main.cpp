@@ -62,7 +62,6 @@ MrY=
 #define DIN2 23
 
 // ===== SENSORS =====
-#define IR_ENCODER 34
 #define TRIG_PIN 5
 #define ECHO_PIN 4
 
@@ -78,20 +77,13 @@ Adafruit_SH1106G display(128, 64, &Wire, -1);
 #define CH_RR 3
 
 // ===== GLOBALS =====
-volatile long pulseCount = 0;
 float distanceCm = 0;
-int motorSpeed = 130; // Increased from 80 because 80 lacks enough torque for skid-turning
+int motorSpeed = 50; // User-requested default speed (50-255 range)
 String currentCmd = "stop";
-const float CM_PER_PULSE = 2.0; // calibrate for your wheel
+const float SPEED_CM_S_MAX = 220.0; // Calibrated: rover moved 11x too far at 20.0, so 20*11=220
 
 WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
-
-// ===== ENCODER ISR =====
-void IRAM_ATTR encoderISR()
-{
-  pulseCount++;
-}
 
 // ===== MOTOR HELPERS =====
 void setMotor(int ch, int in1, int in2, int spd, bool fwd)
@@ -204,23 +196,30 @@ void mqttCallback(char *topic, byte *payload, unsigned int len)
   }
   else if (msg.startsWith("move:"))
   {
-    float target = msg.substring(5).toFloat();
-    pulseCount = 0;
-    distanceCm = 0;
+    float targetCm = msg.substring(5).toFloat();
+    float estimatedSpeed = (motorSpeed / 255.0f) * SPEED_CM_S_MAX;
+    if (estimatedSpeed <= 0) estimatedSpeed = 1.0f; // safety
+    
+    long durationMs = (long)((targetCm / estimatedSpeed) * 1000.0f);
+    unsigned long startTime = millis();
+    
+    Serial.println("Moving " + String(targetCm) + "cm for " + String(durationMs) + "ms");
     moveForward(motorSpeed);
-    while (distanceCm < target)
+    
+    while (millis() - startTime < (unsigned long)durationMs)
     {
-      distanceCm = pulseCount * CM_PER_PULSE;
       float obs = getDistance();
       if (obs > 0 && obs < 15)
       {
         stopAll();
-        break;
+        mqttClient.publish(topic_data, "obstacle_detected");
+        return;
       }
-      delay(10);
+      delay(20);
+      mqttClient.loop(); // keep alive
     }
     stopAll();
-    distanceCm = pulseCount * CM_PER_PULSE;
+    mqttClient.publish(topic_data, "movement_done");
   }
 }
 
@@ -311,8 +310,6 @@ void setup()
   // Sensors
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-  pinMode(IR_ENCODER, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(IR_ENCODER), encoderISR, RISING);
 
   // OLED
   Wire.begin(OLED_SDA, OLED_SCL);
@@ -354,7 +351,6 @@ void loop()
   mqttClient.loop();
 
   float obs = getDistance();
-  distanceCm = pulseCount * CM_PER_PULSE;
 
   // Auto obstacle stop
   if (obs > 0 && obs < 15 && currentCmd == "forward")

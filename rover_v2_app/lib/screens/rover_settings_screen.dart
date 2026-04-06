@@ -170,6 +170,7 @@ class RoverSettingsScreen extends StatelessWidget {
           children: [
             _buildNavItem(context, Icons.sensors, 'STATUS', route: '/status'),
             _buildNavItem(context, Icons.videogame_asset, 'CONTROL', route: '/control'),
+            _buildNavItem(context, Icons.auto_awesome, 'AI', route: '/ai'),
             _buildNavItem(context, Icons.settings, 'SETTINGS', route: '/settings', active: true),
           ],
         ),
