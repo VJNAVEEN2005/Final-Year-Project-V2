@@ -315,6 +315,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen>
         children: [
           _buildNavItem(context, Icons.sensors, 'STATUS', route: '/status'),
           _buildNavItem(context, Icons.videogame_asset, 'CONTROL', route: '/control'),
+          _buildNavItem(context, Icons.map_rounded, 'MAPS', route: '/maps'),
           _buildNavItem(context, Icons.auto_awesome, 'AI', route: '/ai', active: true),
           _buildNavItem(context, Icons.settings, 'SETTINGS', route: '/settings'),
         ],
@@ -328,7 +329,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen>
       onTap: active ? null : () => Navigator.pushReplacementNamed(context, route),
       borderRadius: BorderRadius.circular(12),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: active ? RoverTheme.primary.withOpacity(0.1) : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
@@ -336,7 +337,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: active ? RoverTheme.primary : RoverTheme.secondary, size: 24),
+            Icon(icon, color: active ? RoverTheme.primary : RoverTheme.secondary, size: 22),
             const SizedBox(height: 4),
             Text(
               label,

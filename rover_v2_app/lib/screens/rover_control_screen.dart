@@ -161,13 +161,21 @@ class _RoverControlScreenState extends State<RoverControlScreen>
   }
 
   void _moveDistance() {
-    final val = double.tryParse(_distController.text);
-    if (val != null && val > 0) {
-      _mqtt.publish('move:${val.toStringAsFixed(1)}');
+    final t = _distController.text.trim();
+    if (t.isNotEmpty) {
+      _mqtt.publish('move:$t');
     }
   }
 
-  // ─── Build ────────────────────────────────────────────────────────────────
+  Future<void> _turn90(bool isLeft) async {
+    if (!_isConnected) return;
+    _mqtt.publish(isLeft ? 'left' : 'right');
+    // Hardware estimated 700ms for 90 degree point turn
+    await Future.delayed(const Duration(milliseconds: 700));
+    _mqtt.publish('stop');
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -201,73 +209,67 @@ class _RoverControlScreenState extends State<RoverControlScreen>
         ],
       ),
       bottomNavigationBar: _buildBottomNav(context),
-      body: Stack(
-        children: [
-          Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                child: _buildObstacleBanner(theme),
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+              child: _buildObstacleBanner(theme),
+            ),
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.symmetric(horizontal: 24),
+              padding: const EdgeInsets.fromLTRB(20, 20, 12, 20),
+              decoration: BoxDecoration(
+                color: RoverTheme.surfaceContainerHigh.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(
+                    color: RoverTheme.outlineVariant.withOpacity(0.4)),
               ),
-
-              const SizedBox(height: 12),
-
-              Expanded(
-                child: Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.symmetric(horizontal: 24),
-                  padding: const EdgeInsets.fromLTRB(20, 20, 12, 20),
-                  decoration: BoxDecoration(
-                    color: RoverTheme.surfaceContainerHigh.withOpacity(0.5),
-                    borderRadius: BorderRadius.circular(28),
-                    border: Border.all(
-                        color: RoverTheme.outlineVariant.withOpacity(0.4)),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text('JOYSTICK', style: TextStyle(fontSize: 9, letterSpacing: 2)),
-                          SizedBox(width: 40),
-                          Text('SPEED', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 2, color: RoverTheme.secondary)),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _buildJoystick(),
-                          const SizedBox(width: 12),
-                          _buildVerticalSpeedSlider(),
-                        ],
-                      ),
-                      const SizedBox(height: 24),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _buildMetric('SPEED', '${_speed.toStringAsFixed(1)} m/s', Icons.speed_rounded),
-                          Container(
-                            height: 44,
-                            width: 1,
-                            color: RoverTheme.outlineVariant.withOpacity(0.4),
-                            margin: const EdgeInsets.symmetric(horizontal: 32),
-                          ),
-                          _buildMetric('BEARING', _bearing, Icons.explore_rounded),
-                        ],
-                      ),
+                      Text('JOYSTICK', style: TextStyle(fontSize: 9, letterSpacing: 2)),
+                      SizedBox(width: 40),
+                      Text('SPEED', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 2, color: RoverTheme.secondary)),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _buildJoystick(),
+                      const SizedBox(width: 12),
+                      _buildVerticalSpeedSlider(),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _buildMetric('SPEED', '${_speed.toStringAsFixed(1)} m/s', Icons.speed_rounded),
+                      Container(
+                        height: 44,
+                        width: 1,
+                        color: RoverTheme.outlineVariant.withOpacity(0.4),
+                        margin: const EdgeInsets.symmetric(horizontal: 32),
+                      ),
+                      _buildMetric('BEARING', _bearing, Icons.explore_rounded),
+                    ],
+                  ),
+                ],
               ),
-
-              const SizedBox(height: 16),
-              _buildDistanceControl(theme),
-              const SizedBox(height: 20),
-            ],
-          ),
-        ],
+            ),
+            const SizedBox(height: 16),
+            _buildDistanceControl(theme),
+            const SizedBox(height: 16),
+            _buildTurnControl(theme),
+            const SizedBox(height: 20),
+          ],
+        ),
       ),
     );
   }
@@ -430,6 +432,43 @@ class _RoverControlScreenState extends State<RoverControlScreen>
     );
   }
 
+  Widget _buildTurnControl(ThemeData theme) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: RoverTheme.surfaceContainerLow.withOpacity(0.8), borderRadius: BorderRadius.circular(16), border: Border.all(color: RoverTheme.outlineVariant.withOpacity(0.3))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('90° QUICK TURNS', style: theme.textTheme.labelSmall?.copyWith(fontSize: 8, letterSpacing: 1.5, color: RoverTheme.secondary)),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _isConnected ? () => _turn90(true) : null,
+                  style: ElevatedButton.styleFrom(backgroundColor: RoverTheme.surfaceContainerHigh, foregroundColor: RoverTheme.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), padding: const EdgeInsets.symmetric(vertical: 16)),
+                  icon: const Icon(Icons.rotate_left_rounded),
+                  label: const Text('LEFT 90°'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _isConnected ? () => _turn90(false) : null,
+                  style: ElevatedButton.styleFrom(backgroundColor: RoverTheme.surfaceContainerHigh, foregroundColor: RoverTheme.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), padding: const EdgeInsets.symmetric(vertical: 16)),
+                  icon: const Icon(Icons.rotate_right_rounded),
+                  label: const Text('RIGHT 90°'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildBottomNav(BuildContext context) {
     return Container(
       height: 80,
@@ -443,9 +482,9 @@ class _RoverControlScreenState extends State<RoverControlScreen>
       onTap: active ? null : () => Navigator.pushReplacementNamed(context, route),
       borderRadius: BorderRadius.circular(12),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(color: active ? RoverTheme.primary.withOpacity(0.1) : Colors.transparent, borderRadius: BorderRadius.circular(12)),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: active ? RoverTheme.primary : RoverTheme.secondary, size: 24), const SizedBox(height: 4), Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2, color: active ? RoverTheme.primary : RoverTheme.secondary))]),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: active ? RoverTheme.primary : RoverTheme.secondary, size: 22), const SizedBox(height: 4), Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2, color: active ? RoverTheme.primary : RoverTheme.secondary))]),
       ),
     );
   }

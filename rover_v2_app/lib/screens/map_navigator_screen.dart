@@ -180,6 +180,15 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
     _mqtt.publish('stop');
   }
 
+  Future<void> _manualTurn(bool isLeft) async {
+    if (_state == _NavState.running || !_isConnected) return;
+    setState(() => _state = _NavState.running);
+    _mqtt.publish(isLeft ? 'left' : 'right');
+    await Future.delayed(Duration(milliseconds: _turnDurationMs));
+    _mqtt.publish('stop');
+    if (mounted) setState(() => _state = _NavState.idle);
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
@@ -332,6 +341,21 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
         border: Border(top: BorderSide(color: RoverTheme.outlineVariant, width: 0.5)),
       ),
       child: Row(children: [
+        // Manual Turn Left
+        Container(
+          decoration: BoxDecoration(
+            color: RoverTheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: IconButton(
+            onPressed: (_isConnected && _state != _NavState.running) ? () => _manualTurn(true) : null,
+            icon: const Icon(Icons.rotate_left_rounded),
+            color: RoverTheme.primary,
+            tooltip: 'Turn Left 90°',
+          ),
+        ),
+        const SizedBox(width: 8),
+        
         // Find Path button
         Expanded(
           child: OutlinedButton.icon(
@@ -339,7 +363,7 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
                 ? _findPath
                 : null,
             icon: const Icon(Icons.route_rounded, size: 18),
-            label: const Text('FIND PATH'),
+            label: const Text('PATH', style: TextStyle(fontSize: 12)),
             style: OutlinedButton.styleFrom(
               foregroundColor: RoverTheme.primary,
               side: const BorderSide(color: RoverTheme.primary),
@@ -348,14 +372,15 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
             ),
           ),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 8),
+        
         // RUN / STOP button
         Expanded(
           child: _state == _NavState.running
               ? ElevatedButton.icon(
                   onPressed: _stop,
-                  icon: const Icon(Icons.stop_rounded, size: 20),
-                  label: const Text('STOP'),
+                  icon: const Icon(Icons.stop_rounded, size: 18),
+                  label: const Text('STOP', style: TextStyle(fontSize: 12)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
                     foregroundColor: Colors.white,
@@ -367,8 +392,8 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
                   onPressed: (_path != null && _path!.isNotEmpty && _isConnected && _state != _NavState.running)
                       ? _runPath
                       : null,
-                  icon: const Icon(Icons.rocket_launch_rounded, size: 20),
-                  label: const Text('RUN'),
+                  icon: const Icon(Icons.rocket_launch_rounded, size: 18),
+                  label: const Text('RUN', style: TextStyle(fontSize: 12)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: RoverTheme.primary,
                     foregroundColor: Colors.white,
@@ -376,6 +401,21 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
+        ),
+        
+        const SizedBox(width: 8),
+        // Manual Turn Right
+        Container(
+          decoration: BoxDecoration(
+            color: RoverTheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: IconButton(
+            onPressed: (_isConnected && _state != _NavState.running) ? () => _manualTurn(false) : null,
+            icon: const Icon(Icons.rotate_right_rounded),
+            color: RoverTheme.primary,
+            tooltip: 'Turn Right 90°',
+          ),
         ),
       ]),
     );
