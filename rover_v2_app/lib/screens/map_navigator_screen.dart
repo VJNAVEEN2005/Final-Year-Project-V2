@@ -60,7 +60,7 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
   }
 
   void _onMqttData(String data) {
-    if (data == 'movement_done') {
+    if (data == 'done') {
       _movementCompleter?.complete();
     }
   }
@@ -136,27 +136,20 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
         _statusText = 'Step ${i + 1}/${_commands.length}: $cmd';
       });
 
-      if (cmd.startsWith('move:')) {
+      if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
         _mqtt.publish(cmd);
-        // Wait for movement_done or timeout
+        // Wait for 'done' signal from encoder feedback
         _movementCompleter = Completer<void>();
         await Future.any([
           _movementCompleter!.future,
-          Future.delayed(const Duration(seconds: 30)), // safety timeout
+          Future.delayed(const Duration(seconds: 15)), // safety timeout
         ]);
         _movementCompleter = null;
-        // Advance path highlight
-        if (mounted) setState(() => _currentPathIdx++);
-      } else if (cmd == 'turn_left') {
-        _mqtt.publish('left');
-        await Future.delayed(Duration(milliseconds: _turnDurationMs));
-        _mqtt.publish('stop');
-        await Future.delayed(const Duration(milliseconds: 200));
-      } else if (cmd == 'turn_right') {
-        _mqtt.publish('right');
-        await Future.delayed(Duration(milliseconds: _turnDurationMs));
-        _mqtt.publish('stop');
-        await Future.delayed(const Duration(milliseconds: 200));
+        
+        // If it was a move, advance path highlight
+        if (cmd.startsWith('move:') && mounted) {
+          setState(() => _currentPathIdx++);
+        }
       }
 
       if (_cancelRequested) break;
@@ -321,7 +314,7 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
               border: isActive ? Border.all(color: RoverTheme.primary, width: 1.5) : null,
             ),
             child: Text(
-              cmd.startsWith('move:') ? '→ ${cmd.substring(5)}cm' : cmd == 'turn_left' ? '↺' : '↻',
+              cmd.startsWith('move:') ? '→ ${cmd.substring(5)}cm' : cmd == 'left90' ? '↺' : '↻',
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.bold,

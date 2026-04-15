@@ -51,8 +51,16 @@ Example Output: ["move:30", "right"]
         // Extract JSON array if AI adds triple backticks or text
         final jsonMatch = RegExp(r'\[.*\]', dotAll: true).stringMatch(content);
         if (jsonMatch != null) {
-          final List<dynamic> decoded = jsonDecode(jsonMatch);
-          return decoded.map((e) => e.toString()).toList();
+          final dynamic decoded = jsonDecode(jsonMatch);
+          if (decoded is List) {
+            return decoded.map((e) => e.toString()).toList();
+          } else if (decoded is Map) {
+            // Check for common keys like "commands" or "sequence" if AI wraps the list
+            final possibleList = decoded['commands'] ?? decoded['sequence'] ?? decoded['actions'];
+            if (possibleList is List) {
+              return possibleList.map((e) => e.toString()).toList();
+            }
+          }
         }
       }
     } catch (e) {

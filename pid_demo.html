@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rover PID Speed Controller Demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            --primary: #3b82f6;
+            --primary-dark: #2563eb;
+            --bg-dark: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --accent: #f59e0b;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+            font-size: 1.1rem; /* Slightly larger text overall */
+        }
+
+        /* --- Header --- */
+        header {
+            padding: 1.5rem 2rem;
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 700;
+            font-size: 1.25rem;
+            color: var(--primary);
+        }
+
+        /* --- Simulation Area --- */
+        #simulation-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            background: linear-gradient(to bottom, #111827, #1f2937);
+        }
+
+        #road {
+            position: absolute;
+            bottom: 30%;
+            left: 0;
+            width: 200%;
+            height: 60px;
+            background: repeating-linear-gradient(
+                90deg,
+                #334155 0,
+                #334155 40px,
+                #475569 40px,
+                #475569 80px
+            );
+            border-top: 2px solid rgba(255, 255, 255, 0.2);
+            border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+            animation: moveRoad linear infinite;
+        }
+
+        @keyframes moveRoad {
+            from { transform: translateX(0); }
+            to { transform: translateX(-80px); }
+        }
+
+        #rover {
+            position: absolute;
+            bottom: calc(30% + 10px);
+            left: 50%;
+            transform: translateX(-50%);
+            width: 120px;
+            height: auto;
+            z-index: 10;
+            transition: transform 0.1s ease-out;
+            filter: drop-shadow(0 10px 15px rgba(0, 0, 0, 0.5));
+        }
+
+        .weight-indicator {
+            position: absolute;
+            top: -40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--accent);
+            color: black;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            display: none;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        /* --- Middle Section: Graph --- */
+        #telemetry-section {
+            flex: 2; /* Take more room */
+            padding: 1.5rem 2rem;
+            background: var(--card-bg);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            position: relative;
+        }
+
+        .chart-container {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* --- Footer Controls --- */
+        #controls-panel {
+            background: #0f172a;
+            padding: 2rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2.5rem;
+            max-height: 40vh;
+            overflow-y: auto;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .control-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .control-label {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .control-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            color: var(--primary);
+        }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--primary);
+            cursor: pointer;
+        }
+
+        button.action-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        button.action-btn:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+        }
+
+        button.action-btn.active {
+            background: var(--accent);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            #controls-panel {
+                grid-template-columns: 1fr 1fr;
+                padding: 1rem;
+            }
+            #telemetry-section {
+                height: 180px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">
+            <i data-lucide="cpu"></i>
+            ROVER PID SIMULATOR
+        </div>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <div id="status-badge" style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; color: #10b981;">
+                <span style="width: 8px; height: 8px; background: #10b981; border-radius: 50%;"></span>
+                Controller Active
+            </div>
+            <button class="action-btn" id="reset-btn" style="background: transparent; border: 1px solid rgba(255,255,255,0.1); padding: 0.5rem 1rem;">
+                Reset
+            </button>
+        </div>
+    </header>
+
+    <main id="simulation-container">
+        <div id="road"></div>
+        <div id="rover">
+            <div class="weight-indicator" id="weight-tag">+5kg LOAD</div>
+            <!-- Using generated image -->
+            <img src="rover_sprite.png" alt="Rover" id="rover-img" style="width: 100%;">
+        </div>
+        
+        <div style="position: absolute; top: 2rem; right: 2rem; background: rgba(0,0,0,0.8); padding: 1.5rem; border-radius: 16px; border: 2px solid var(--primary); pointer-events: none; min-width: 250px;">
+            <div style="font-size: 0.875rem; color: var(--text-dim); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Current Velocity</div>
+            <div id="speed-display" style="font-size: 3.5rem; font-weight: 800; font-family: 'JetBrains Mono'; color: var(--primary); line-height: 1;">0.00 <span style="font-size: 1rem;">cm/s</span></div>
+            <div style="height: 1px; background: rgba(255,255,255,0.1); margin: 1.5rem 0;"></div>
+            <div style="font-size: 0.875rem; color: var(--text-dim); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Motor Force (PWM)</div>
+            <div id="power-display" style="font-size: 2rem; font-weight: 700; font-family: 'JetBrains Mono'; color: var(--accent);">0%</div>
+        </div>
+    </main>
+
+    <section id="telemetry-section">
+        <div class="chart-container">
+            <canvas id="speedChart"></canvas>
+        </div>
+    </section>
+
+    <footer id="controls-panel">
+        <!-- PID TUNING -->
+        <div class="control-group">
+            <div class="control-header">
+                <span class="control-label"><i data-lucide="settings-2" size="16"></i> Kp (Proportional)</span>
+                <span class="control-value" id="val-kp">2.00</span>
+            </div>
+            <input type="range" id="input-kp" min="0" max="10" step="0.1" value="2.0">
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <span class="control-label"><i data-lucide="infinity" size="16"></i> Ki (Integral)</span>
+                <span class="control-value" id="val-ki">0.50</span>
+            </div>
+            <input type="range" id="input-ki" min="0" max="2" step="0.01" value="0.5">
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <span class="control-label"><i data-lucide="trending-up" size="16"></i> Kd (Derivative)</span>
+                <span class="control-value" id="val-kd">0.10</span>
+            </div>
+            <input type="range" id="input-kd" min="0" max="1" step="0.01" value="0.1">
+        </div>
+
+        <!-- SETPOINT & LOAD -->
+        <div class="control-group">
+            <div class="control-header">
+                <span class="control-label"><i data-lucide="target" size="16"></i> Target Speed</span>
+                <span class="control-value" id="val-target">50 cm/s</span>
+            </div>
+            <input type="range" id="input-target" min="0" max="200" step="5" value="50">
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <span class="control-label"><i data-lucide="weight" size="16"></i> Added Load (KG)</span>
+                <span class="control-value" id="val-weight">0 KG</span>
+            </div>
+            <input type="range" id="input-weight" min="0" max="20" step="1" value="0">
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <span class="control-label"><i data-lucide="gauge" size="16"></i> Simulation Speed</span>
+                <span class="control-value" id="val-sim-speed">1.0x</span>
+            </div>
+            <input type="range" id="input-sim-speed" min="0.1" max="2" step="0.1" value="1.0">
+        </div>
+    </footer>
+
+    <script>
+        // Initialize Icons
+        lucide.createIcons();
+
+        // --- SIMULATION STATE ---
+        let state = {
+            targetSpeed: 50,
+            actualSpeed: 0,
+            kp: 2.0,
+            ki: 0.5,
+            kd: 0.1,
+            integral: 0,
+            prevError: 0,
+            baseMass: 1.0,
+            addedWeight: 0,
+            simSpeed: 1.0,
+            power: 0,
+            dt: 30, // update more frequently for smoothness
+            time: 0
+        };
+
+        // --- CHART SETUP ---
+        const ctx = document.getElementById('speedChart').getContext('2d');
+        const speedChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(50).fill(''),
+                datasets: [
+                    {
+                        label: 'Target Speed',
+                        data: Array(50).fill(50),
+                        borderColor: 'rgba(255, 255, 255, 0.3)',
+                        borderDash: [5, 5],
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        fill: false
+                    },
+                    {
+                        label: 'Measured Speed',
+                        data: Array(50).fill(0),
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 3,
+                        pointRadius: 0,
+                        fill: true,
+                        tension: 0.4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 250,
+                        grid: { color: 'rgba(255,255,255,0.05)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    x: {
+                        display: false
+                    }
+                },
+                plugins: {
+                    legend: { display: false }
+                },
+                animation: false
+            }
+        });
+
+        // --- DOM ELEMENTS ---
+        const el = {
+            kpSlider: document.getElementById('input-kp'),
+            kiSlider: document.getElementById('input-ki'),
+            kdSlider: document.getElementById('input-kd'),
+            targetSlider: document.getElementById('input-target'),
+            weightSlider: document.getElementById('input-weight'),
+            simSpeedSlider: document.getElementById('input-sim-speed'),
+            kpVal: document.getElementById('val-kp'),
+            kiVal: document.getElementById('val-ki'),
+            kdVal: document.getElementById('val-kd'),
+            targetVal: document.getElementById('val-target'),
+            weightVal: document.getElementById('val-weight'),
+            simSpeedVal: document.getElementById('val-sim-speed'),
+            speedDisplay: document.getElementById('speed-display'),
+            powerDisplay: document.getElementById('power-display'),
+            road: document.getElementById('road'),
+            weightTag: document.getElementById('weight-tag'),
+            resetBtn: document.getElementById('reset-btn')
+        };
+
+        // --- INTERACTIONS ---
+        el.kpSlider.oninput = (e) => { state.kp = parseFloat(e.target.value); el.kpVal.innerText = state.kp.toFixed(2); };
+        el.kiSlider.oninput = (e) => { state.ki = parseFloat(e.target.value); el.kiVal.innerText = state.ki.toFixed(2); };
+        el.kdSlider.oninput = (e) => { state.kd = parseFloat(e.target.value); el.kdVal.innerText = state.kd.toFixed(2); };
+        el.targetSlider.oninput = (e) => { state.targetSpeed = parseInt(e.target.value); el.targetVal.innerText = state.targetSpeed + ' cm/s'; };
+
+        el.weightSlider.oninput = (e) => {
+            state.addedWeight = parseInt(e.target.value);
+            el.weightVal.innerText = state.addedWeight + ' KG';
+            if (state.addedWeight > 0) {
+                el.weightTag.innerText = '+' + state.addedWeight + ' KG LOAD';
+                el.weightTag.style.display = 'block';
+            } else {
+                el.weightTag.style.display = 'none';
+            }
+        };
+
+        el.simSpeedSlider.oninput = (e) => {
+            state.simSpeed = parseFloat(e.target.value);
+            el.simSpeedVal.innerText = state.simSpeed.toFixed(1) + 'x';
+        };
+
+        el.resetBtn.onclick = () => {
+            state.actualSpeed = 0;
+            state.integral = 0;
+            state.prevError = 0;
+            state.power = 0;
+        };
+
+        // --- MAIN LOOP ---
+        setInterval(() => {
+            const dt = (state.dt / 1000) * state.simSpeed;
+            
+            // 1. PID CALCULATION
+            const error = state.targetSpeed - state.actualSpeed;
+            state.integral += error * dt;
+            
+            // Anti-windup (clamp integral)
+            const maxIntegral = 100;
+            state.integral = Math.max(-maxIntegral, Math.min(maxIntegral, state.integral));
+
+            const derivative = (error - state.prevError) / dt;
+            state.prevError = error;
+
+            let output = (state.kp * error) + (state.ki * state.integral) + (state.kd * derivative);
+            
+            // Clamp motor power 0-100%
+            state.power = Math.max(0, Math.min(100, output));
+
+            // 2. PHYSICS SIMULATION
+            // Motor force is proportional to power
+            const motorForce = state.power * 2.5; 
+            
+            // Resistance increases with speed (drag) and weight
+            // Each KG adds some rolling friction
+            const frictionCoefficient = 5 + (state.addedWeight * 1.5);
+            const dragCoefficient = 0.5;
+            
+            // Rolling friction + drag
+            const resistance = frictionCoefficient + (state.actualSpeed * dragCoefficient);
+            
+            // Prevent resistance from moving backwards if stationary
+            const netForce = (state.actualSpeed < 0.1 && motorForce < resistance) ? 0 : motorForce - resistance;
+            
+            const totalMass = state.baseMass + (state.addedWeight * 0.5); 
+            const acceleration = netForce / totalMass;
+            state.actualSpeed += acceleration * dt;
+            if (state.actualSpeed < 0) state.actualSpeed = 0;
+
+            // 3. UI UPDATE
+            el.speedDisplay.innerHTML = `${state.actualSpeed.toFixed(2)} <span style="font-size: 0.875rem;">cm/s</span>`;
+            el.powerDisplay.innerText = `${state.power.toFixed(0)}%`;
+
+            // Visual Road Animation Speed
+            // Speed of animation (to match road markers)
+            const animDuration = state.actualSpeed > 0 ? (100 / state.actualSpeed) : 0;
+            if (animDuration > 0) {
+                el.road.style.animationDuration = `${animDuration}s`;
+            } else {
+                el.road.style.animationName = 'none';
+                setTimeout(() => el.road.style.animationName = 'moveRoad', 10);
+            }
+
+            // 4. CHART UPDATE
+            speedChart.data.datasets[1].data.push(state.actualSpeed);
+            speedChart.data.datasets[1].data.shift();
+            speedChart.data.datasets[0].data.push(state.targetSpeed);
+            speedChart.data.datasets[0].data.shift();
+            speedChart.update('none');
+
+            // Slight shake/tilt if speed is high or accelerating
+            const shake = Math.min(2, state.actualSpeed / 50);
+            document.getElementById('rover').style.transform = `translateX(-50%) rotate(${shake * (Math.random() - 0.5)}deg)`;
+
+        }, state.dt);
+    </script>
+</body>
+</html>

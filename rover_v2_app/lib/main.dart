@@ -6,6 +6,7 @@ import 'screens/rover_control_screen.dart';
 import 'screens/rover_settings_screen.dart';
 import 'screens/ai_assistant_screen.dart';
 import 'screens/map_gallery_screen.dart';
+import 'screens/map_scanner_screen.dart';
 import 'theme/rover_theme.dart';
 
 void main() {
@@ -36,6 +37,7 @@ class RoverApp extends StatelessWidget {
         '/ai': (context) => const AiAssistantScreen(),
         '/settings': (context) => const RoverSettingsScreen(),
         '/maps': (context) => const MapGalleryScreen(),
+        '/scan': (context) => const MapScannerScreen(),
       },
     );
   }

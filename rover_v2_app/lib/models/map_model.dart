@@ -117,20 +117,41 @@ class GridMap {
         'createdAt': createdAt.toIso8601String(),
       };
 
-  factory GridMap.fromJson(Map<String, dynamic> j) => GridMap(
-        id: j['id'] as String,
-        name: j['name'] as String,
-        rows: j['rows'] as int,
-        cols: j['cols'] as int,
-        cellSizeCm: (j['cellSizeCm'] as num).toDouble(),
-        grid: (j['grid'] as List)
-            .map((r) => (r as List).map((e) => e as int).toList())
-            .toList(),
-        startRow: j['startRow'] as int?,
-        startCol: j['startCol'] as int?,
-        startDirectionIndex: j['startDirectionIndex'] as int? ?? 0,
-        createdAt: DateTime.parse(j['createdAt'] as String),
-      );
+  factory GridMap.fromJson(Map<String, dynamic> j) {
+    final rows = j['rows'] as int? ?? 0;
+    final cols = j['cols'] as int? ?? 0;
+    
+    // Safe parsing of nested list
+    RoverGrid parsedGrid;
+    try {
+      final rawGrid = j['grid'];
+      if (rawGrid is List) {
+        parsedGrid = rawGrid.map((r) {
+          if (r is List) {
+            return r.map((e) => (e is num) ? e.toInt() : 0).toList();
+          }
+          return List.filled(cols, 0);
+        }).toList();
+      } else {
+        parsedGrid = List.generate(rows, (_) => List.filled(cols, 0));
+      }
+    } catch (_) {
+      parsedGrid = List.generate(rows, (_) => List.filled(cols, 0));
+    }
+
+    return GridMap(
+      id: j['id'] as String? ?? '',
+      name: j['name'] as String? ?? 'Unnamed Map',
+      rows: rows,
+      cols: cols,
+      cellSizeCm: (j['cellSizeCm'] as num? ?? 30.0).toDouble(),
+      grid: parsedGrid,
+      startRow: j['startRow'] as int?,
+      startCol: j['startCol'] as int?,
+      startDirectionIndex: j['startDirectionIndex'] as int? ?? 0,
+      createdAt: DateTime.tryParse(j['createdAt'] as String? ?? '') ?? DateTime.now(),
+    );
+  }
 
   String toJsonString() => jsonEncode(toJson());
   factory GridMap.fromJsonString(String s) =>

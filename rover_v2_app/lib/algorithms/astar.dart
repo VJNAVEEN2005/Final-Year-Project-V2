@@ -149,13 +149,13 @@ class AStarPathfinder {
       // Compute minimum turns needed
       final diff = (requiredDir - currentDir + 4) % 4;
       if (diff == 1) {
-        commands.add('turn_right');
+        commands.add('right90');
       } else if (diff == 3) {
-        commands.add('turn_left');
+        commands.add('left90');
       } else if (diff == 2) {
         // 180° — two right turns
-        commands.add('turn_right');
-        commands.add('turn_right');
+        commands.add('right90');
+        commands.add('right90');
       }
       currentDir = requiredDir;
 

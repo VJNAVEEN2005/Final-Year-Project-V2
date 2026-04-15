@@ -67,6 +67,11 @@ class _MapGalleryScreenState extends State<MapGalleryScreen> {
     _reload();
   }
 
+  void _openScanner() async {
+    final success = await Navigator.pushNamed(context, '/scan');
+    if (success == true) _reload();
+  }
+
   void _delete(GridMap map) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -108,12 +113,28 @@ class _MapGalleryScreenState extends State<MapGalleryScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _createNew,
-        backgroundColor: RoverTheme.primary,
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('New Map', style: TextStyle(fontWeight: FontWeight.bold)),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'scan_btn',
+            onPressed: _openScanner,
+            backgroundColor: Colors.blue,
+            foregroundColor: Colors.white,
+            icon: const Icon(Icons.qr_code_scanner_rounded),
+            label: const Text('Scan Room', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+            heroTag: 'new_btn',
+            onPressed: _createNew,
+            backgroundColor: RoverTheme.primary,
+            foregroundColor: Colors.white,
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('New Map', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
       ),
       bottomNavigationBar: _buildBottomNav(context),
       body: _loading

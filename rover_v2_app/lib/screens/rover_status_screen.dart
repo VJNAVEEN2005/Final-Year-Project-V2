@@ -25,6 +25,8 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
   double _obstacleDistCm = 0;
   bool _obstacleDetected = false;
   double _distanceCoveredCm = 0;
+  double _linearSpeed = 0;
+  double _wheelRpm = 0;
 
   // ─── Animations ───────────────────────────────────────────────────────────
   late AnimationController _pulseController;
@@ -102,6 +104,16 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
           setState(() {
             _distanceCoveredCm = dist;
           });
+        }
+      } else if (part.startsWith('spd:')) {
+        final spd = double.tryParse(part.substring(4));
+        if (spd != null && mounted) {
+          setState(() => _linearSpeed = spd);
+        }
+      } else if (part.startsWith('rpm:')) {
+        final rpm = double.tryParse(part.substring(4));
+        if (rpm != null && mounted) {
+          setState(() => _wheelRpm = rpm);
         }
       }
     }
@@ -223,6 +235,8 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
                         ? '${_obstacleDistCm.toStringAsFixed(1)} cm'
                         : '--'),
                 _buildTelemetryItem(Icons.route, 'DIST COVERED', '${_distanceCoveredCm.toStringAsFixed(1)} cm'),
+                _buildTelemetryItem(Icons.speed_rounded, 'REAL-TIME SPEED', '${_linearSpeed.toStringAsFixed(1)} cm/s'),
+                _buildTelemetryItem(Icons.settings_input_component_rounded, 'WHEEL ROTATION', '${_wheelRpm.toStringAsFixed(0)} RPM'),
               ],
             ),
           ],

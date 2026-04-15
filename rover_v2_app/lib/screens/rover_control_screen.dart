@@ -32,6 +32,8 @@ class _RoverControlScreenState extends State<RoverControlScreen>
   String _currentCmd = 'stop';
   String _bearing = '--';
   double _speed = 0.0;
+  double _actualSpeed = 0.0;
+  double _wheelRpm = 0.0;
 
   // ─── Motor Speed ──────────────────────────────────────────────────────────
   double _motorSpeed = 50; // User-requested default speed (50-255 range)
@@ -93,9 +95,16 @@ class _RoverControlScreenState extends State<RoverControlScreen>
     }
     final parts = data.split(',');
     double? obs;
+    double? spd;
+    double? rpm;
+
     for (final part in parts) {
       if (part.startsWith('obs:')) {
         obs = double.tryParse(part.substring(4));
+      } else if (part.startsWith('spd:')) {
+        spd = double.tryParse(part.substring(4));
+      } else if (part.startsWith('rpm:')) {
+        rpm = double.tryParse(part.substring(4));
       }
     }
     setState(() {
@@ -103,6 +112,8 @@ class _RoverControlScreenState extends State<RoverControlScreen>
         _obstacleDistCm = obs;
         _obstacleDetected = obs > 0 && obs < 15;
       }
+      if (spd != null) _actualSpeed = spd;
+      if (rpm != null) _wheelRpm = rpm;
     });
   }
 
@@ -169,11 +180,10 @@ class _RoverControlScreenState extends State<RoverControlScreen>
 
   Future<void> _turn90(bool isLeft) async {
     if (!_isConnected) return;
-    _mqtt.publish(isLeft ? 'left' : 'right');
-    // Hardware estimated 700ms for 90 degree point turn
-    await Future.delayed(const Duration(milliseconds: 700));
-    _mqtt.publish('stop');
+    final cmd = isLeft ? 'left90' : 'right90';
+    _mqtt.publish(cmd);
   }
+
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
@@ -247,16 +257,14 @@ class _RoverControlScreenState extends State<RoverControlScreen>
                     ],
                   ),
                   const SizedBox(height: 24),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 16,
+                    runSpacing: 12,
                     children: [
-                      _buildMetric('SPEED', '${_speed.toStringAsFixed(1)} m/s', Icons.speed_rounded),
-                      Container(
-                        height: 44,
-                        width: 1,
-                        color: RoverTheme.outlineVariant.withOpacity(0.4),
-                        margin: const EdgeInsets.symmetric(horizontal: 32),
-                      ),
+                      _buildMetric('TARGET', '${_speed.toStringAsFixed(1)} m/s', Icons.track_changes_rounded),
+                      _buildMetric('ACTUAL', '${_actualSpeed.toStringAsFixed(1)} cm/s', Icons.speed_rounded),
+                      _buildMetric('WHEEL', '${_wheelRpm.toStringAsFixed(0)} RPM', Icons.settings_input_component_rounded),
                       _buildMetric('BEARING', _bearing, Icons.explore_rounded),
                     ],
                   ),

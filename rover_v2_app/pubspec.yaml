@@ -38,10 +38,12 @@ dependencies:
   esp_smartconfig: ^3.0.0
   shared_preferences: ^2.5.5
   network_info_plus: ^7.0.0
-  permission_handler: ^12.0.1
+  permission_handler: ^11.3.1
   openrouter_api: ^1.0.2
   speech_to_text: ^7.0.0
   flutter_tts: ^4.2.2
+  ar_flutter_plugin_2: 0.0.3
+  vector_math: ^2.1.4
 
 dev_dependencies:
   flutter_test:
@@ -67,6 +69,7 @@ flutter:
 
   assets:
     - assets/certs/emqx_ca.crt
+    - assets/scanned_floor.png
 
 
   # An image asset can refer to one or more resolution-specific "variants", see
