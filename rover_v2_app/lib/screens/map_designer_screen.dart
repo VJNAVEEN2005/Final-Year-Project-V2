@@ -3,7 +3,7 @@ import '../models/map_model.dart';
 import '../services/map_service.dart';
 import '../theme/rover_theme.dart';
 
-enum _Tool { wall, erase, start }
+enum _Tool { hand, wall, erase, start, place }
 
 class MapDesignerScreen extends StatefulWidget {
   final GridMap map;
@@ -19,7 +19,6 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
   late GridMap _map;
   _Tool _tool = _Tool.wall;
 
-  // Cell pixel size for display
   static const double _cellPx = 38.0;
 
   @override
@@ -32,10 +31,13 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
 
   void _handleTap(int row, int col) {
     if (row < 0 || row >= _map.rows || col < 0 || col >= _map.cols) return;
+    if (_tool == _Tool.hand) return;
+    if (_tool != _Tool.wall && _tool != _Tool.erase && _map.grid[row][col] == 1) return;
     setState(() {
       switch (_tool) {
+        case _Tool.hand:
+          break;
         case _Tool.wall:
-          // toggle
           final grid = _deepCopyGrid();
           grid[row][col] = grid[row][col] == 1 ? 0 : 1;
           _map = _map.copyWith(grid: grid);
@@ -45,13 +47,15 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
           _map = _map.copyWith(grid: grid);
         case _Tool.start:
           _showDirectionPicker(row, col);
+        case _Tool.place:
+          _showPlaceDialog(row, col);
       }
     });
   }
 
   void _handleDrag(int row, int col) {
     if (row < 0 || row >= _map.rows || col < 0 || col >= _map.cols) return;
-    if (_tool == _Tool.start) return; // start is tap-only
+    if (_tool == _Tool.hand || _tool == _Tool.start || _tool == _Tool.place) return;
     setState(() {
       final grid = _deepCopyGrid();
       grid[row][col] = _tool == _Tool.wall ? 1 : 0;
@@ -59,8 +63,7 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
     });
   }
 
-  RoverGrid _deepCopyGrid() =>
-      _map.grid.map((r) => List<int>.from(r)).toList();
+  RoverGrid _deepCopyGrid() => _map.grid.map((r) => List<int>.from(r)).toList();
 
   void _showDirectionPicker(int row, int col) {
     showDialog<int>(
@@ -95,6 +98,88 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
     });
   }
 
+  void _showPlaceDialog(int row, int col) {
+    final existingPlace = _map.places.indexWhere(
+      (p) => p.row == row && p.col == col,
+    );
+    final nameCtrl = TextEditingController(
+      text: existingPlace >= 0 ? _map.places[existingPlace].name : '',
+    );
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: RoverTheme.surfaceContainerHigh,
+        title: Text(existingPlace >= 0 ? 'Edit Place' : 'Add Place'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Place Name',
+                prefixIcon: Icon(Icons.place_rounded),
+                hintText: 'e.g., Room A, Room B',
+              ),
+              autofocus: true,
+              textCapitalization: TextCapitalization.characters,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Location: ($row, $col)',
+              style: const TextStyle(fontSize: 12, color: RoverTheme.secondary),
+            ),
+          ],
+        ),
+        actions: [
+          if (existingPlace >= 0)
+            TextButton(
+              onPressed: () {
+                final newPlaces = List<Place>.from(_map.places);
+                newPlaces.removeAt(existingPlace);
+                setState(() => _map = _map.copyWith(places: newPlaces));
+                Navigator.pop(ctx);
+              },
+              child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final name = nameCtrl.text.trim().toUpperCase();
+              if (name.isEmpty) return;
+              if (existingPlace >= 0) {
+                final newPlaces = List<Place>.from(_map.places);
+                newPlaces[existingPlace] = Place(
+                  name: name,
+                  row: row,
+                  col: col,
+                );
+                setState(() => _map = _map.copyWith(places: newPlaces));
+              } else {
+                final duplicate = _map.places.indexWhere((p) => p.name == name);
+                if (duplicate >= 0) return;
+                final newPlaces = [
+                  ..._map.places,
+                  Place(name: name, row: row, col: col),
+                ];
+                setState(() => _map = _map.copyWith(places: newPlaces));
+              }
+              Navigator.pop(ctx);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: RoverTheme.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(existingPlace >= 0 ? 'Update' : 'Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _save() async {
     if (widget.isNew) {
       await MapService.save(_map);
@@ -121,7 +206,10 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
         title: const Text('Clear Map'),
         content: const Text('Remove all walls and reset start point?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Clear', style: TextStyle(color: Colors.red)),
@@ -165,7 +253,10 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: Text(_map.name, style: theme.textTheme.titleLarge?.copyWith(fontSize: 18)),
+        title: Text(
+          _map.name,
+          style: theme.textTheme.titleLarge?.copyWith(fontSize: 18),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.delete_sweep_rounded, color: Colors.orange),
@@ -193,11 +284,27 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _stat(Icons.grid_on_rounded, 'Grid', '${_map.rows}×${_map.cols}'),
-                _stat(Icons.straighten_rounded, 'Cell', '${_map.cellSizeCm.toInt()} cm'),
-                _stat(Icons.aspect_ratio_rounded, 'Area', '${totalWm}m × ${totalHm}m'),
+                _stat(
+                  Icons.grid_on_rounded,
+                  'Grid',
+                  '${_map.rows}×${_map.cols}',
+                ),
+                _stat(
+                  Icons.straighten_rounded,
+                  'Cell',
+                  '${_map.cellSizeCm.toInt()} cm',
+                ),
+                _stat(
+                  Icons.aspect_ratio_rounded,
+                  'Area',
+                  '${totalWm}m × ${totalHm}m',
+                ),
                 if (_map.hasStart)
-                  _stat(Icons.navigation_rounded, 'Start', '${_map.startDirection.arrow} (${_map.startRow},${_map.startCol})'),
+                  _stat(
+                    Icons.navigation_rounded,
+                    'Start',
+                    '${_map.startDirection.arrow} (${_map.startRow},${_map.startCol})',
+                  ),
               ],
             ),
           ),
@@ -208,6 +315,7 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
               constrained: false,
               minScale: 0.5,
               maxScale: 3.0,
+              boundaryMargin: const EdgeInsets.all(100),
               child: GestureDetector(
                 onTapDown: (d) {
                   final (r, c) = _posToCell(d.localPosition);
@@ -219,10 +327,7 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
                 },
                 child: CustomPaint(
                   size: Size(gridW, gridH),
-                  painter: _GridPainter(
-                    map: _map,
-                    cellPx: _cellPx,
-                  ),
+                  painter: _GridPainter(map: _map, cellPx: _cellPx),
                 ),
               ),
             ),
@@ -236,14 +341,34 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
   }
 
   Widget _stat(IconData icon, String label, String value) {
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 11, color: RoverTheme.primary),
-        const SizedBox(width: 3),
-        Text(label, style: const TextStyle(fontSize: 9, letterSpacing: 1, color: RoverTheme.secondary)),
-      ]),
-      Text(value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: RoverTheme.primary)),
-    ]);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 11, color: RoverTheme.primary),
+            const SizedBox(width: 3),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 9,
+                letterSpacing: 1,
+                color: RoverTheme.secondary,
+              ),
+            ),
+          ],
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: RoverTheme.primary,
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _buildToolbar(ThemeData theme) {
@@ -251,14 +376,38 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: RoverTheme.surfaceContainerLow,
-        border: const Border(top: BorderSide(color: RoverTheme.outlineVariant, width: 0.5)),
+        border: const Border(
+          top: BorderSide(color: RoverTheme.outlineVariant, width: 0.5),
+        ),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _toolBtn(_Tool.wall, Icons.grid_4x4_rounded, 'WALL', Colors.red.shade700),
-          _toolBtn(_Tool.erase, Icons.auto_fix_high_rounded, 'ERASE', Colors.grey),
-          _toolBtn(_Tool.start, Icons.navigation_rounded, 'START', Colors.orange),
+          _toolBtn(
+            _Tool.hand,
+            Icons.pan_tool_rounded,
+            'HAND',
+            Colors.blue,
+          ),
+          _toolBtn(
+            _Tool.wall,
+            Icons.grid_4x4_rounded,
+            'WALL',
+            Colors.red.shade700,
+          ),
+          _toolBtn(
+            _Tool.erase,
+            Icons.auto_fix_high_rounded,
+            'ERASE',
+            Colors.grey,
+          ),
+          _toolBtn(
+            _Tool.start,
+            Icons.navigation_rounded,
+            'START',
+            Colors.orange,
+          ),
+          _toolBtn(_Tool.place, Icons.place_rounded, 'PLACE', Colors.teal),
         ],
       ),
     );
@@ -274,13 +423,26 @@ class _MapDesignerScreenState extends State<MapDesignerScreen> {
         decoration: BoxDecoration(
           color: active ? color.withOpacity(0.15) : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: active ? color : Colors.transparent, width: 1.5),
+          border: Border.all(
+            color: active ? color : Colors.transparent,
+            width: 1.5,
+          ),
         ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, color: active ? color : RoverTheme.secondary, size: 22),
-          const SizedBox(height: 4),
-          Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: active ? color : RoverTheme.secondary)),
-        ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: active ? color : RoverTheme.secondary, size: 22),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: active ? color : RoverTheme.secondary,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -296,8 +458,9 @@ class _GridPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final wallPaint = Paint()..color = const Color(0xFF8B4513).withOpacity(0.85);
-    final emptyPaint = Paint()..color = const Color(0xFF1E1E2E);
+    final wallPaint = Paint()
+      ..color = const Color(0xFF8B4513).withOpacity(0.85);
+    final emptyPaint = Paint()..color = RoverTheme.surfaceContainer;
     final gridLinePaint = Paint()
       ..color = Colors.white.withOpacity(0.06)
       ..strokeWidth = 0.5
@@ -321,25 +484,76 @@ class _GridPainter extends CustomPainter {
     if (map.hasStart) {
       final sr = map.startRow!;
       final sc = map.startCol!;
-      final rect = Rect.fromLTWH(sc * cellPx + 2, sr * cellPx + 2, cellPx - 4, cellPx - 4);
-      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(6)), startPaint);
+      final rect = Rect.fromLTWH(
+        sc * cellPx + 2,
+        sr * cellPx + 2,
+        cellPx - 4,
+        cellPx - 4,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(6)),
+        startPaint,
+      );
 
       // Draw direction arrow text
       final textPainter = TextPainter(
         text: TextSpan(
           text: map.startDirection.arrow,
-          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
       textPainter.paint(
         canvas,
-        Offset(sc * cellPx + (cellPx - textPainter.width) / 2, sr * cellPx + (cellPx - textPainter.height) / 2),
+        Offset(
+          sc * cellPx + (cellPx - textPainter.width) / 2,
+          sr * cellPx + (cellPx - textPainter.height) / 2,
+        ),
+      );
+    }
+
+    // Draw places
+    for (final place in map.places) {
+      final placePaint = Paint()..color = Colors.teal;
+      final rect = Rect.fromLTWH(
+        place.col * cellPx + 2,
+        place.row * cellPx + 2,
+        cellPx - 4,
+        cellPx - 4,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(6)),
+        placePaint,
+      );
+      final tp = TextPainter(
+        text: TextSpan(
+          text: place.name,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(
+        canvas,
+        Offset(
+          place.col * cellPx + (cellPx - tp.width) / 2,
+          place.row * cellPx + (cellPx - tp.height) / 2,
+        ),
       );
     }
 
     // Draw outer border
-    canvas.drawRect(Rect.fromLTWH(0, 0, map.cols * cellPx, map.rows * cellPx), borderPaint);
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, map.cols * cellPx, map.rows * cellPx),
+      borderPaint,
+    );
   }
 
   @override

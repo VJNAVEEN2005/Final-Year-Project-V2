@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:openrouter_api/openrouter_api.dart';
+import '../models/map_model.dart';
+import '../algorithms/astar.dart';
 
 class AiService {
   AiService._internal();
@@ -15,24 +17,58 @@ class AiService {
   static const String _model = "stepfun/step-3.5-flash:free";
 
   /// Translates natural language into a list of MQTT instructions.
-  Future<List<String>> getCommands(String userPrompt) async {
+  /// 
+  /// Supports:
+  /// - Place navigation: "go to Room A" → uses pathfinding to navigate to a named place
+  /// - Distance movement: "move:30" (30cm forward), "back:20" (20cm backward)
+  /// - Turns: "left", "right", "turn left", "turn right"
+  /// - Continuous movement: "forward", "backward", "stop"
+  /// - Speed control: "speed:150" (PWM value 50-255)
+  Future<List<String>> getCommands(String userPrompt, {List<Place>? places, int? startRow, int? startCol, RoverGrid? grid, double cellSizeCm = 30.0}) async {
+    final normalized = userPrompt.toLowerCase().trim();
+    debugPrint('[AI] Processing: $normalized');
+    
+    // Check if user wants to navigate to a named place
+    if (places != null && places.isNotEmpty && _isPlaceNavigation(normalized)) {
+      return _handlePlaceNavigation(normalized, places, startRow, startCol, grid, cellSizeCm);
+    }
+    
+    // Default: use AI to parse commands
     const systemPrompt = '''
-You are a robotic rover controller. Your task is to translate natural language user requests into a valid JSON array of rover commands.
-Available commands:
-- "forward" (continuous forward)
-- "backward" (continuous backward)
-- "left" (turn left in place)
-- "right" (turn right in place)
-- "stop" (halt all movement)
-- "move:<number>" (e.g., "move:20" - move forward exactly <number> cm)
-- "speed:<number>" (e.g., "speed:150" - set PWM speed 50-255)
+You are a robotic rover controller. Translate natural language into MQTT commands.
 
-If the user says "go straight" or "move forward" without a distance, use "forward".
-If the user specifies a distance (e.g., "move forward 20cm"), use "move:20".
+DIRECTION MAPPING (CRITICAL - follow exactly):
+- Forwards/forward/move forward/go straight = move forward = use "move:X"
+- Backwards/backward/move backward/go back = move backward = use "back:X"
+- Turn right/rotate right = face right = use "right90"
+- Turn left/rotate left = face left = use "left90"
+- Move right/go right = physically move right side = use "right:cm"
+- Move left/go left = physically move left side = use "left:cm"
 
-IMPORTANT: Return ONLY a valid JSON list of strings. No explanation.
-Example Input: "go straight for 30 and then turn right"
-Example Output: ["move:30", "right"]
+AVAILABLE COMMANDS:
+- "move:X" - move forward X centimeters (X is a number)
+- "back:X" - move backward X centimeters (X is a number) 
+- "right:X" - move right X centimeters
+- "left:X" - move left X centimeters
+- "right90" - turn right 90 degrees
+- "left90" - turn left 90 degrees
+- "forward" - move forward continuously
+- "backward" - move backward continuously
+- "right" - turn right continuously
+- "left" - turn left continuously
+- "stop" - halt all movement
+
+MAPPING EXAMPLES (IMPORTANT):
+- "go forward 30cm" / "move forward 30cm" → ["move:30"]
+- "go straight 30cm" → ["move:30"]
+- "go backwards 20cm" / "go back 20cm" → ["back:20"]
+- "turn right" / "rotate right" → ["right90"]
+- "turn left" / "rotate left" → ["left90"]
+- "move right 30cm" → ["right:30"]
+- "move left 30cm" → ["left:30"]
+- "go to Room A" → ["navigate:Room A"]
+
+Respond ONLY with a valid JSON array of strings.
 ''';
 
     try {
@@ -67,5 +103,82 @@ Example Output: ["move:30", "right"]
       debugPrint('[AI] Error: $e');
     }
     return [];
+  }
+
+  bool _isPlaceNavigation(String text) {
+    final patterns = ['go to', 'navigate to', 'move to', 'go to the', 'walk to'];
+    for (final p in patterns) {
+      if (text.contains(p)) return true;
+    }
+    return false;
+  }
+
+  List<String> _handlePlaceNavigation(
+    String text,
+    List<Place> places,
+    int? startRow,
+    int? startCol,
+    RoverGrid? grid,
+    double cellSizeCm,
+  ) {
+    // Find which place the user wants to go to
+    Place? target;
+    for (final p in places) {
+      final nameLower = p.name.toLowerCase();
+      if (text.contains(nameLower)) {
+        target = p;
+        break;
+      }
+    }
+
+    // If no exact match, try to find a partial match
+    if (target == null) {
+      for (final p in places) {
+        final nameLower = p.name.toLowerCase();
+        for (final word in text.split(' ')) {
+          if (word.length > 2 && nameLower.contains(word)) {
+            target = p;
+            break;
+          }
+        }
+        if (target != null) break;
+      }
+    }
+
+    if (target == null) {
+      // No matching place found - return empty to trigger error message
+      return [];
+    }
+
+    // If we don't have grid/start info, return navigate command with just the place name
+    if (grid == null || startRow == null || startCol == null) {
+      return ['navigate:${target.name}'];
+    }
+
+    // Find path from start to target
+    final path = AStarPathfinder.findPath(
+      grid: grid,
+      startRow: startRow,
+      startCol: startCol,
+      goalRow: target.row,
+      goalCol: target.col,
+    );
+
+    if (path == null || path.isEmpty) {
+      return ['error:No path found to ${target.name}'];
+    }
+
+    // Convert path to commands
+    final commands = AStarPathfinder.pathToCommands(
+      path: path,
+      startDirection: 0, // Default to north
+      cellSizeCm: cellSizeCm,
+    );
+
+    if (commands.isEmpty) {
+      return ['error:Already at ${target.name}'];
+    }
+
+    return commands;
   }
 }

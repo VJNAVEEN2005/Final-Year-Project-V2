@@ -25,6 +25,7 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
   double _obstacleDistCm = 0;
   bool _obstacleDetected = false;
   double _distanceCoveredCm = 0;
+  double _currentYaw = 0;
   double _linearSpeed = 0;
   double _wheelRpm = 0;
 
@@ -115,6 +116,11 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
         if (rpm != null && mounted) {
           setState(() => _wheelRpm = rpm);
         }
+      } else if (part.startsWith('yaw:')) {
+        final yaw = double.tryParse(part.substring(4));
+        if (yaw != null && mounted) {
+          setState(() => _currentYaw = yaw);
+        }
       }
     }
   }
@@ -161,21 +167,7 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
                 style: theme.textTheme.titleLarge?.copyWith(fontSize: 20)),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_none, color: RoverTheme.secondary),
-            onPressed: () {},
-          ),
-          const Padding(
-            padding: EdgeInsets.only(right: 16),
-            child: CircleAvatar(
-              radius: 16,
-              backgroundImage: NetworkImage(
-                'https://lh3.googleusercontent.com/aida-public/AB6AXuBT69SI3ea5NW8VsHLYie1GK4Hq6ksHxC7XinuF2Hgj7Gq_R7Qu867IADCyeNSo3nbzWdEdoe5VBwfmpie6zpWo7o5iNjyhwBRbIzGWTAP_xsELCLcPmEYz27zo6Zfir1KHaD8aOhTfSTR1_m0TlnuNLnwAHDHDF7MbZ2QhieW-2zxhLFyhmh6KuczX1hY7gtYwYwJoVwxWIq3I-G3zFHrGQJ5yWwINCld0i_WnuKCLdQOKoqRxtj-3_v4mJazfRWxW971W8jtOq_k',
-              ),
-            ),
-          ),
-        ],
+        actions: const [],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),

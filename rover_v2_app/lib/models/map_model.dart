@@ -3,6 +3,28 @@ import 'dart:convert';
 /// 0 = empty cell, 1 = wall cell
 typedef RoverGrid = List<List<int>>;
 
+class Place {
+  final String name;
+  final int row;
+  final int col;
+
+  const Place({required this.name, required this.row, required this.col});
+
+  Place copyWith({String? name, int? row, int? col}) => Place(
+    name: name ?? this.name,
+    row: row ?? this.row,
+    col: col ?? this.col,
+  );
+
+  Map<String, dynamic> toJson() => {'name': name, 'row': row, 'col': col};
+
+  factory Place.fromJson(Map<String, dynamic> j) => Place(
+    name: j['name'] as String? ?? '',
+    row: j['row'] as int? ?? 0,
+    col: j['col'] as int? ?? 0,
+  );
+}
+
 /// Cardinal directions: 0=North, 1=East, 2=South, 3=West
 enum RoverDirection {
   north,
@@ -12,19 +34,27 @@ enum RoverDirection {
 
   String get label {
     switch (this) {
-      case north: return 'N';
-      case east:  return 'E';
-      case south: return 'S';
-      case west:  return 'W';
+      case north:
+        return 'N';
+      case east:
+        return 'E';
+      case south:
+        return 'S';
+      case west:
+        return 'W';
     }
   }
 
   String get arrow {
     switch (this) {
-      case north: return '↑';
-      case east:  return '→';
-      case south: return '↓';
-      case west:  return '←';
+      case north:
+        return '↑';
+      case east:
+        return '→';
+      case south:
+        return '↓';
+      case west:
+        return '←';
     }
   }
 
@@ -36,11 +66,12 @@ class GridMap {
   final String name;
   final int rows;
   final int cols;
-  final double cellSizeCm;     // physical size of each cell in centimeters
-  final RoverGrid grid;        // grid[row][col]: 0=empty, 1=wall
+  final double cellSizeCm; // physical size of each cell in centimeters
+  final RoverGrid grid; // grid[row][col]: 0=empty, 1=wall
   final int? startRow;
   final int? startCol;
   final int startDirectionIndex; // RoverDirection index
+  final List<Place> places;
   final DateTime createdAt;
 
   const GridMap({
@@ -53,6 +84,7 @@ class GridMap {
     this.startRow,
     this.startCol,
     this.startDirectionIndex = 0, // North by default
+    this.places = const [],
     required this.createdAt,
   });
 
@@ -76,6 +108,7 @@ class GridMap {
       cols: cols,
       cellSizeCm: cellSizeCm,
       grid: List.generate(rows, (_) => List.filled(cols, 0)),
+      places: const [],
       createdAt: DateTime.now(),
     );
   }
@@ -87,6 +120,7 @@ class GridMap {
     int? startRow,
     int? startCol,
     int? startDirectionIndex,
+    List<Place>? places,
     bool clearStart = false,
   }) {
     return GridMap(
@@ -98,30 +132,30 @@ class GridMap {
       grid: grid ?? this.grid,
       startRow: clearStart ? null : (startRow ?? this.startRow),
       startCol: clearStart ? null : (startCol ?? this.startCol),
-      startDirectionIndex:
-          startDirectionIndex ?? this.startDirectionIndex,
+      startDirectionIndex: startDirectionIndex ?? this.startDirectionIndex,
+      places: places ?? this.places,
       createdAt: createdAt,
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'rows': rows,
-        'cols': cols,
-        'cellSizeCm': cellSizeCm,
-        'grid': grid,
-        'startRow': startRow,
-        'startCol': startCol,
-        'startDirectionIndex': startDirectionIndex,
-        'createdAt': createdAt.toIso8601String(),
-      };
+    'id': id,
+    'name': name,
+    'rows': rows,
+    'cols': cols,
+    'cellSizeCm': cellSizeCm,
+    'grid': grid,
+    'startRow': startRow,
+    'startCol': startCol,
+    'startDirectionIndex': startDirectionIndex,
+    'places': places.map((p) => p.toJson()).toList(),
+    'createdAt': createdAt.toIso8601String(),
+  };
 
   factory GridMap.fromJson(Map<String, dynamic> j) {
     final rows = j['rows'] as int? ?? 0;
     final cols = j['cols'] as int? ?? 0;
-    
-    // Safe parsing of nested list
+
     RoverGrid parsedGrid;
     try {
       final rawGrid = j['grid'];
@@ -139,6 +173,24 @@ class GridMap {
       parsedGrid = List.generate(rows, (_) => List.filled(cols, 0));
     }
 
+    List<Place> parsedPlaces = [];
+    try {
+      final rawPlaces = j['places'];
+      if (rawPlaces is List) {
+        parsedPlaces = rawPlaces
+            .map((p) {
+              if (p is Map) {
+                return Place.fromJson(Map<String, dynamic>.from(p));
+              }
+              return Place(name: '', row: 0, col: 0);
+            })
+            .where((p) => p.name.isNotEmpty)
+            .toList();
+      }
+    } catch (_) {
+      parsedPlaces = [];
+    }
+
     return GridMap(
       id: j['id'] as String? ?? '',
       name: j['name'] as String? ?? 'Unnamed Map',
@@ -149,7 +201,9 @@ class GridMap {
       startRow: j['startRow'] as int?,
       startCol: j['startCol'] as int?,
       startDirectionIndex: j['startDirectionIndex'] as int? ?? 0,
-      createdAt: DateTime.tryParse(j['createdAt'] as String? ?? '') ?? DateTime.now(),
+      places: parsedPlaces,
+      createdAt:
+          DateTime.tryParse(j['createdAt'] as String? ?? '') ?? DateTime.now(),
     );
   }
 

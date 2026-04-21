@@ -1,9 +1,26 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../theme/rover_theme.dart';
 import '../services/mqtt_service.dart';
 import '../services/ai_service.dart';
 import '../services/voice_service.dart';
+import '../providers/map_provider.dart';
+import '../providers/navigation_provider.dart';
+
+class ChatMessage {
+  final String text;
+  final bool isUser;
+  final bool isSystem;
+  final bool isThinking;
+
+  ChatMessage({
+    required this.text,
+    required this.isUser,
+    this.isSystem = false,
+    this.isThinking = false,
+  });
+}
 
 class AiAssistantScreen extends StatefulWidget {
   const AiAssistantScreen({super.key});
@@ -12,17 +29,54 @@ class AiAssistantScreen extends StatefulWidget {
   State<AiAssistantScreen> createState() => _AiAssistantScreenState();
 }
 
-class _AiAssistantScreenState extends State<AiAssistantScreen>
-    with TickerProviderStateMixin {
+class _AiAssistantScreenState extends State<AiAssistantScreen> with TickerProviderStateMixin {
   final MqttService _mqtt = MqttService.instance;
+  final TextEditingController _textController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final FocusNode _focusNode = FocusNode();
 
   bool _isVoiceActive = false;
   bool _isListening = false;
   bool _isAiThinking = false;
-  String _voiceResultText = "Tap the mic to start command...";
+  String _voiceResultText = "";
+  List<ChatMessage> _messages = [];
   List<String> _pendingAiCommands = [];
   String? _currentlyExecuting;
   StreamSubscription? _doneSub;
+  StreamSubscription<bool>? _connSub;
+  bool _isConnected = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _connSub = _mqtt.connectionStream.listen((connected) {
+      if (mounted) setState(() => _isConnected = connected);
+    });
+    _addWelcomeMessage();
+  }
+
+  void _addWelcomeMessage() {
+    _messages.add(ChatMessage(
+      text: "Hello! I'm your Rover AI Assistant.\n\nYou can:\n• Type commands below\n• Tap the mic for voice\n• Ask to navigate to places\n• Control rover movements",
+      isUser: false,
+      isSystem: true,
+    ));
+  }
+
+  Future<void> _handleSubmit(String text) async {
+    if (text.trim().isEmpty) return;
+    
+    final userText = text.trim();
+    _textController.clear();
+    
+    setState(() {
+      _messages.add(ChatMessage(text: userText, isUser: true));
+      _messages.add(ChatMessage(text: "Thinking...", isUser: false, isSystem: true, isThinking: true));
+    });
+    _scrollToBottom();
+
+    await _processAiInput(userText);
+  }
 
   Future<void> _handleVoiceMicTap() async {
     if (_isVoiceActive) {
@@ -30,7 +84,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen>
         VoiceService.instance.stopListening();
         setState(() => _isListening = false);
       } else {
-        setState(() => _isVoiceActive = false);
+        _restartListening();
       }
       return;
     }
@@ -48,90 +102,263 @@ class _AiAssistantScreenState extends State<AiAssistantScreen>
     setState(() {
       _isVoiceActive = true;
       _isListening = true;
-      _voiceResultText = "Listening for command...";
-      _pendingAiCommands = [];
     });
 
+    _addSystemMessage("Listening for command...");
+
     VoiceService.instance.startListening((text) {
-      if (mounted) {
+      if (mounted && text.isNotEmpty) {
         setState(() {
-          _voiceResultText = text;
           _isListening = false;
           _isAiThinking = true;
+          _voiceResultText = text;
         });
-        _processAiInput(text);
+        _handleSubmit(text);
       }
     });
   }
 
-  Future<void> _processAiInput(String voiceText) async {
-    if (voiceText.isEmpty) {
+  Future<void> _restartListening() async {
+    if (!_isVoiceActive || !_isListening) return;
+
+    setState(() {
+      _isListening = true;
+    });
+
+    VoiceService.instance.startListening((text) {
+      if (mounted && text.isNotEmpty) {
+        setState(() {
+          _isListening = false;
+          _isAiThinking = true;
+          _voiceResultText = text;
+        });
+        _handleSubmit(text);
+      }
+    });
+  }
+
+  void _addSystemMessage(String text) {
+    setState(() {
+      _messages.add(ChatMessage(text: text, isUser: false, isSystem: true));
+    });
+    _scrollToBottom();
+  }
+
+  void _scrollToBottom() {
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _processAiInput(String inputText) async {
+    if (inputText.isEmpty) {
       setState(() => _isVoiceActive = false);
       return;
     }
 
-    final commands = await AiService.instance.getCommands(voiceText);
+    final mapProvider = context.read<MapProvider>();
+    final navProvider = NavigationProvider.instance;
+
+    final currentMap = mapProvider.currentMap;
+    final startRow = currentMap?.startRow ?? navProvider.currentRow;
+    final startCol = currentMap?.startCol ?? navProvider.currentCol;
+    final places = currentMap?.places ?? [];
+    final grid = currentMap?.grid;
+    final cellSize = currentMap?.cellSizeCm ?? 30.0;
+
+    final commands = await AiService.instance.getCommands(
+      inputText,
+      places: places,
+      startRow: startRow,
+      startCol: startCol,
+      grid: grid,
+      cellSizeCm: cellSize,
+    );
     if (!mounted) return;
 
+    // Remove thinking message and add response
+    setState(() {
+      _messages.removeWhere((m) => m.isThinking);
+      _isAiThinking = false;
+    });
+
     if (commands.isEmpty) {
-      setState(() {
-        _isAiThinking = false;
-        _voiceResultText = "I didn't understand that command.";
-      });
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) setState(() => _isVoiceActive = false);
-      });
+      _addSystemMessage("I didn't understand that command. Try something like 'move forward 30cm' or 'go to Room A'.");
       return;
     }
 
+    // Check for error responses
+    for (final cmd in commands) {
+      if (cmd.startsWith('error:')) {
+        _addSystemMessage(cmd.substring(6));
+        return;
+      }
+    }
+
     setState(() {
-      _isAiThinking = false;
       _pendingAiCommands = commands;
     });
 
-    final confirmText = "Executing sequence: ${commands.join(', ')}";
+    final confirmText = "Executing: ${commands.join(' → ')}";
+    _addSystemMessage(confirmText);
     VoiceService.instance.speak(confirmText);
 
-    _executeAisSequence(commands);
+    _executeAiSequence(
+      commands,
+      startRow: navProvider.currentRow,
+      startCol: navProvider.currentCol,
+      cellSize: cellSize,
+    );
   }
 
-  Future<void> _executeAisSequence(List<String> commands) async {
+  Future<void> _executeAiSequence(List<String> commands, {int? startRow, int? startCol, double cellSize = 30.0}) async {
+    int curRow = startRow ?? 0;
+    int curCol = startCol ?? 0;
+    int curDir = 0;
+
     for (final cmd in commands) {
       if (!mounted) break;
+
+      if (cmd.startsWith('error:')) {
+        setState(() => _currentlyExecuting = cmd);
+        _addSystemMessage(cmd.substring(6));
+        continue;
+      }
+
       setState(() => _currentlyExecuting = cmd);
-      
       _mqtt.publish(cmd);
 
       if (cmd.startsWith('move:')) {
+        final dist = double.tryParse(cmd.substring(5)) ?? 10.0;
         final completer = Completer<void>();
         _doneSub = _mqtt.doneStream.listen((_) {
           if (!completer.isCompleted) completer.complete();
         });
-        
-        final dist = double.tryParse(cmd.substring(5)) ?? 10;
+
         await completer.future.timeout(
           Duration(seconds: (dist / 5).round() + 3),
-          onTimeout: () => debugPrint('[AI] Move timeout, forcing next'),
+          onTimeout: () => debugPrint('[AI] Move timeout'),
         );
         _doneSub?.cancel();
+
+        final cellsToMove = (dist / cellSize).round();
+        _movePosition(curDir, cellsToMove, curRow, curCol, (r, c) {
+          curRow = r;
+          curCol = c;
+        });
+
+      } else if (cmd.startsWith('back:')) {
+        final dist = double.tryParse(cmd.substring(5)) ?? 10.0;
+        final completer = Completer<void>();
+        _doneSub = _mqtt.doneStream.listen((_) {
+          if (!completer.isCompleted) completer.complete();
+        });
+
+        await completer.future.timeout(
+          Duration(seconds: (dist / 5).round() + 3),
+          onTimeout: () => debugPrint('[AI] Back timeout'),
+        );
+        _doneSub?.cancel();
+
+        final cellsToMove = (dist / cellSize).round();
+        _movePosition(curDir, -cellsToMove, curRow, curCol, (r, c) {
+          curRow = r;
+          curCol = c;
+        });
+
+      } else if (cmd == 'left90') {
+        curDir = (curDir - 1 + 4) % 4;
+        final completer = Completer<void>();
+        _doneSub = _mqtt.doneStream.listen((_) {
+          if (!completer.isCompleted) completer.complete();
+        });
+        await Future.any([
+          completer.future,
+          Future.delayed(const Duration(milliseconds: 2000)),
+        ]);
+        _doneSub?.cancel();
+
+      } else if (cmd == 'right90') {
+        curDir = (curDir + 1) % 4;
+        final completer = Completer<void>();
+        _doneSub = _mqtt.doneStream.listen((_) {
+          if (!completer.isCompleted) completer.complete();
+        });
+        await Future.any([
+          completer.future,
+          Future.delayed(const Duration(milliseconds: 2000)),
+        ]);
+        _doneSub?.cancel();
+
+      } else if (cmd.startsWith('right:') || cmd.startsWith('left:')) {
+        final dist = double.tryParse(RegExp(r'\d+').firstMatch(cmd)?.group(0) ?? '10') ?? 10.0;
+        final completer = Completer<void>();
+        _doneSub = _mqtt.doneStream.listen((_) {
+          if (!completer.isCompleted) completer.complete();
+        });
+        await completer.future.timeout(
+          Duration(seconds: (dist / 5).round() + 3),
+          onTimeout: () {},
+        );
+        _doneSub?.cancel();
+
+      } else if (cmd == 'left' || cmd == 'right') {
+        await Future.delayed(const Duration(milliseconds: 700));
       } else {
         await Future.delayed(const Duration(milliseconds: 600));
       }
+
+      // Update command display
+      setState(() {
+        final idx = _pendingAiCommands.indexOf(cmd);
+        if (idx < _pendingAiCommands.length - 1) {
+          _currentlyExecuting = _pendingAiCommands[idx + 1];
+        }
+      });
     }
 
+    final navProvider = NavigationProvider.instance;
+    navProvider.updatePosition(curRow, curCol, curDir);
+
     if (mounted) {
-      setState(() {
-        _currentlyExecuting = "Complete!";
-      });
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) setState(() => _isVoiceActive = false);
-      });
+      setState(() => _currentlyExecuting = null);
+      _addSystemMessage("✓ Command sequence complete!");
     }
+  }
+
+  void _movePosition(int dir, int cells, int curRow, int curCol, void Function(int, int) update) {
+    int newRow = curRow;
+    int newCol = curCol;
+    switch (dir) {
+      case 0:
+        newRow = curRow - cells;
+        break;
+      case 1:
+        newCol = curCol + cells;
+        break;
+      case 2:
+        newRow = curRow + cells;
+        break;
+      case 3:
+        newCol = curCol - cells;
+        break;
+    }
+    update(newRow, newCol);
   }
 
   @override
   void dispose() {
     _doneSub?.cancel();
+    _connSub?.cancel();
+    _textController.dispose();
+    _scrollController.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -140,185 +367,89 @@ class _AiAssistantScreenState extends State<AiAssistantScreen>
     final theme = Theme.of(context);
 
     return Scaffold(
-      backgroundColor: Colors.black.withOpacity(0.85),
+      backgroundColor: RoverTheme.background,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: Row(
           children: [
-            const Icon(Icons.auto_awesome, color: RoverTheme.primary),
+            Icon(Icons.smart_toy_rounded, color: RoverTheme.primary),
             const SizedBox(width: 12),
             Text(
               'AI Assistant',
-              style: theme.textTheme.titleLarge?.copyWith(fontSize: 20, color: Colors.white),
+              style: theme.textTheme.titleLarge?.copyWith(fontSize: 20),
             ),
           ],
         ),
-      ),
-      bottomNavigationBar: _buildBottomNav(context),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      floatingActionButton: _buildVoiceFab(),
-      body: SafeArea(
-        child: Column(
-          children: [
-            const SizedBox(height: 60),
-            if (_isListening || _isAiThinking)
-              _buildPulsar()
-            else
-              const SizedBox(height: 120), // Placeholder for pulsar
-            
-            const SizedBox(height: 40),
-            
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 40),
-              child: Text(
-                _voiceResultText,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w300,
-                  fontStyle: _isListening ? FontStyle.italic : null,
-                ),
-              ),
+        actions: [
+          Container(
+            margin: const EdgeInsets.only(right: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: _isConnected ? Colors.green.withValues(alpha: 0.15) : Colors.red.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _isConnected ? Colors.green.withValues(alpha: 0.4) : Colors.red.withValues(alpha: 0.4)),
             ),
-
-            if (_isAiThinking)
-              const Padding(
-                padding: EdgeInsets.only(top: 20),
-                child: Text('AI is thinking...', 
-                  style: TextStyle(color: RoverTheme.secondary, fontSize: 12)),
-              ),
-
-            if (_pendingAiCommands.isNotEmpty)
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(32.0),
-                  child: Column(
-                    children: [
-                      const Text('COMMAND SEQUENCE', 
-                        style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 2)),
-                      const SizedBox(height: 16),
-                      for (final c in _pendingAiCommands)
-                        _buildCmdRow(c),
-                    ],
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _isConnected ? Colors.green : Colors.red,
                   ),
                 ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildVoiceFab() {
-    return Container(
-      height: 72,
-      width: 72,
-      margin: const EdgeInsets.only(bottom: 12),
-      child: GestureDetector(
-        onTap: _handleVoiceMicTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _isVoiceActive ? Colors.red : RoverTheme.primary,
-            boxShadow: [
-              BoxShadow(
-                color: (_isVoiceActive ? Colors.red : RoverTheme.primary)
-                    .withOpacity(0.4),
-                blurRadius: _isListening ? 25 : 12,
-                spreadRadius: _isListening ? 6 : 0,
-              ),
-            ],
-          ),
-          child: Icon(
-            _isVoiceActive 
-              ? (_isListening ? Icons.hearing_rounded : Icons.close_rounded)
-              : Icons.mic_rounded,
-            color: Colors.white,
-            size: 32,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPulsar() {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0.8, end: 1.2),
-      duration: const Duration(milliseconds: 600),
-      curve: Curves.easeInOut,
-      builder: (context, value, child) {
-        return Container(
-          width: 120 * value,
-          height: 120 * value,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(color: RoverTheme.primary.withOpacity(0.5 / value), width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: RoverTheme.primary.withOpacity(0.2 / value),
-                blurRadius: 40,
-                spreadRadius: 20,
-              )
-            ],
-          ),
-          child: const Center(
-            child: Icon(Icons.auto_awesome, color: RoverTheme.primary, size: 40),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildCmdRow(String cmd) {
-    final isDone = _pendingAiCommands.indexOf(cmd) < 
-                  (_pendingAiCommands.indexOf(_currentlyExecuting ?? '') == -1 
-                      ? 0 : _pendingAiCommands.indexOf(_currentlyExecuting!));
-    final isCurrent = _currentlyExecuting == cmd;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            isDone ? Icons.check_circle_rounded : (isCurrent ? Icons.play_circle_filled_rounded : Icons.circle_outlined),
-            size: 16,
-            color: isCurrent ? RoverTheme.primary : (isDone ? Colors.green : Colors.white24),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            cmd.toUpperCase(),
-            style: TextStyle(
-              color: isCurrent ? Colors.white : Colors.white38,
-              fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-              fontSize: 16,
+                const SizedBox(width: 6),
+                Text(
+                  _isConnected ? 'ONLINE' : 'OFFLINE',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: _isConnected ? Colors.green : Colors.red,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildBottomNav(BuildContext context) {
-    return Container(
-      height: 80,
-      decoration: BoxDecoration(
-        color: RoverTheme.background.withOpacity(0.95),
-        border: const Border(
-            top: BorderSide(color: RoverTheme.outlineVariant, width: 0.5)),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
+      body: Column(
         children: [
-          _buildNavItem(context, Icons.sensors, 'STATUS', route: '/status'),
-          _buildNavItem(context, Icons.videogame_asset, 'CONTROL', route: '/control'),
-          _buildNavItem(context, Icons.map_rounded, 'MAPS', route: '/maps'),
-          _buildNavItem(context, Icons.auto_awesome, 'AI', route: '/ai', active: true),
-          _buildNavItem(context, Icons.settings, 'SETTINGS', route: '/settings'),
+          Expanded(
+            child: ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              itemCount: _messages.length,
+              itemBuilder: (context, index) {
+                final msg = _messages[index];
+                return _buildMessageBubble(msg);
+              },
+            ),
+          ),
+          if (_pendingAiCommands.isNotEmpty && _currentlyExecuting != null)
+            _buildExecutingBar(),
+          _buildInputArea(),
         ],
+      ),
+      bottomNavigationBar: Container(
+        height: 80,
+        decoration: BoxDecoration(
+          color: RoverTheme.background.withValues(alpha: 0.95),
+          border: const Border(top: BorderSide(color: RoverTheme.outlineVariant, width: 0.5)),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildNavItem(context, Icons.sensors, 'STATUS', route: '/status'),
+            _buildNavItem(context, Icons.videogame_asset, 'CONTROL', route: '/control'),
+            _buildNavItem(context, Icons.map_rounded, 'MAPS', route: '/maps'),
+            _buildNavItem(context, Icons.auto_awesome, 'AI', route: '/ai', active: true),
+            _buildNavItem(context, Icons.settings, 'SETTINGS', route: '/settings'),
+          ],
+        ),
       ),
     );
   }
@@ -331,7 +462,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: active ? RoverTheme.primary.withOpacity(0.1) : Colors.transparent,
+          color: active ? RoverTheme.primary.withValues(alpha: 0.1) : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Column(
@@ -346,6 +477,153 @@ class _AiAssistantScreenState extends State<AiAssistantScreen>
                 fontWeight: FontWeight.bold,
                 letterSpacing: 1.2,
                 color: active ? RoverTheme.primary : RoverTheme.secondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessageBubble(ChatMessage msg) {
+    final isUser = msg.isUser;
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: EdgeInsets.all(isUser ? 14 : 12),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
+        ),
+        decoration: BoxDecoration(
+          color: isUser
+              ? RoverTheme.primary
+              : (msg.isThinking
+                  ? RoverTheme.surfaceContainerHigh
+                  : RoverTheme.surfaceContainerLow),
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: Radius.circular(isUser ? 18 : 4),
+            bottomRight: Radius.circular(isUser ? 4 : 18),
+          ),
+        ),
+        child: msg.isThinking
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: RoverTheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    msg.text,
+                    style: const TextStyle(
+                      color: RoverTheme.secondary,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
+              )
+            : Text(
+                msg.text,
+                style: TextStyle(
+                  color: isUser ? Colors.white : null,
+                  fontSize: 14,
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildExecutingBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: RoverTheme.surfaceContainerHigh,
+      child: Row(
+        children: [
+          const Icon(Icons.play_arrow_rounded, color: RoverTheme.primary, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Executing: $_currentlyExecuting',
+              style: const TextStyle(
+                color: RoverTheme.primary,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Text(
+            '${_pendingAiCommands.indexOf(_currentlyExecuting!) + 1}/${_pendingAiCommands.length}',
+            style: const TextStyle(
+              color: RoverTheme.secondary,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInputArea() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: RoverTheme.surfaceContainerLow,
+        border: Border(
+          top: BorderSide(color: RoverTheme.outlineVariant.withValues(alpha: 0.3)),
+        ),
+      ),
+      child: SafeArea(
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _textController,
+                focusNode: _focusNode,
+                decoration: InputDecoration(
+                  hintText: 'Type a command...',
+                  hintStyle: const TextStyle(color: RoverTheme.secondary),
+                  filled: true,
+                  fillColor: RoverTheme.surfaceContainer,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                textInputAction: TextInputAction.send,
+                onSubmitted: _handleSubmit,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _isVoiceActive ? Colors.red : RoverTheme.primary,
+              ),
+              child: IconButton(
+                icon: Icon(
+                  _isListening ? Icons.close_rounded : Icons.mic_rounded,
+                  color: Colors.white,
+                ),
+                onPressed: _handleVoiceMicTap,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: RoverTheme.primary,
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.send_rounded, color: Colors.white),
+                onPressed: () => _handleSubmit(_textController.text),
               ),
             ),
           ],

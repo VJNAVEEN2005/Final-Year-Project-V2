@@ -4,6 +4,7 @@ import '../algorithms/astar.dart';
 import '../models/map_model.dart';
 import '../services/mqtt_service.dart';
 import '../theme/rover_theme.dart';
+import 'live_navigation_screen.dart';
 
 enum _NavState { idle, running, done, error }
 
@@ -18,23 +19,35 @@ class MapNavigatorScreen extends StatefulWidget {
 class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
   late GridMap _map;
 
-  // ── Path state ─────────────────────────────────────────────────────────────
+  Place? _selectedPlace;
+
+  // Current position (rover location)
+  int? _currentRow;
+  int? _currentCol;
+  bool _currentSet = false;
+
+  // Real-time heading from gyroscope
+  double _currentHeading = 0;
+
+  // Destination
   int? _destRow, _destCol;
+
+  // Path state
   List<PathCell>? _path;
   List<String> _commands = [];
   int _currentCommandIdx = 0;
   int _currentPathIdx = 0;
 
-  // ── Execution state ────────────────────────────────────────────────────────
+  // Execution state
   _NavState _state = _NavState.idle;
-  String _statusText = 'Select a destination cell to begin.';
+  String _statusText = 'Set current position → Select destination → Navigate';
   Completer<void>? _movementCompleter;
   bool _cancelRequested = false;
 
-  // ── Settings ───────────────────────────────────────────────────────────────
-  int _turnDurationMs = 700; // ms for 90° turn
+  // Settings
+  int _turnDurationMs = 700;
 
-  // ── MQTT ───────────────────────────────────────────────────────────────────
+  // MQTT
   final MqttService _mqtt = MqttService.instance;
   StreamSubscription<String>? _dataSub;
   bool _isConnected = false;
@@ -45,6 +58,9 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
   void initState() {
     super.initState();
     _map = widget.map;
+    _currentRow = _map.startRow;
+    _currentCol = _map.startCol;
+    _currentSet = _map.hasStart;
     _isConnected = _mqtt.isConnected;
     _dataSub = _mqtt.dataStream.listen(_onMqttData);
     _mqtt.connectionStream.listen((v) {
@@ -62,35 +78,155 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
   void _onMqttData(String data) {
     if (data == 'done') {
       _movementCompleter?.complete();
+      return;
+    }
+    // Parse telemetry for heading
+    for (final part in data.split(',')) {
+      if (part.startsWith('yaw:')) {
+        final yaw = double.tryParse(part.substring(4));
+        if (yaw != null) {
+          setState(() => _currentHeading = yaw);
+        }
+      }
     }
   }
 
-  // ── Destination selection ───────────────────────────────────────────────────
+  // Set current position
+  void _setCurrentPosition(int row, int col) {
+    if (row < 0 || row >= _map.rows || col < 0 || col >= _map.cols) return;
+    if (_map.grid[row][col] == 1) return;
+    setState(() {
+      _currentRow = row;
+      _currentCol = col;
+      _currentSet = true;
+      _path = null;
+      _commands = [];
+      _statusText = 'Current: ($row, $col) → Set destination';
+    });
+  }
+
+  // Select destination
+  void _setDestination(int row, int col, {Place? place}) {
+    if (row < 0 || row >= _map.rows || col < 0 || col >= _map.cols) return;
+    if (_map.grid[row][col] == 1) return;
+    setState(() {
+      _destRow = row;
+      _destCol = col;
+      _selectedPlace = place;
+      _path = null;
+      _commands = [];
+      if (place != null) {
+        _statusText = 'Current: ($_currentRow, $_currentCol) → ${place.name}';
+      } else {
+        _statusText = 'Current: ($_currentRow, $_currentCol) → ($row, $col)';
+      }
+    });
+  }
+
+  void _clearDestination() {
+    setState(() {
+      _destRow = null;
+      _destCol = null;
+      _selectedPlace = null;
+      _path = null;
+      _commands = [];
+      _statusText = _currentSet
+          ? 'Current: ($_currentRow, $_currentCol) → Set destination'
+          : 'Set current position first';
+    });
+  }
+
+  // ── Place selection ─────────────────────────────────────────────────────
+
+  void _showPlaceSelector() {
+    if (_map.places.isEmpty) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: RoverTheme.surfaceContainerHigh,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Select Destination',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _map.places
+                  .map(
+                    (p) => ActionChip(
+                      avatar: const Icon(Icons.place_rounded, size: 18),
+                      label: Text(p.name),
+                      backgroundColor: _selectedPlace?.name == p.name
+                          ? RoverTheme.primary.withOpacity(0.2)
+                          : null,
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        setState(() {
+                          _selectedPlace = p;
+                          _destRow = p.row;
+                          _destCol = p.col;
+                          _path = null;
+                          _commands = [];
+                          _state = _NavState.idle;
+                          _statusText =
+                              'Destination: ${p.name}. Tap FIND PATH.';
+                        });
+                      },
+                    ),
+                  )
+                  .toList(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Position selection ───────────────────────────────────────────────────
 
   void _onCellTap(int row, int col) {
     if (_state == _NavState.running) return;
     if (row < 0 || row >= _map.rows || col < 0 || col >= _map.cols) return;
-    if (_map.grid[row][col] == 1) return; // wall
-    if (row == _map.startRow && col == _map.startCol) return; // same as start
+    if (_map.grid[row][col] == 1) return;
+
+    if (!_currentSet) {
+      _setCurrentPosition(row, col);
+      return;
+    }
+
+    if (_destRow == null) {
+      if (row == _currentRow && col == _currentCol) return;
+      _setDestination(row, col);
+      return;
+    }
 
     setState(() {
       _destRow = row;
       _destCol = col;
+      _selectedPlace = null;
       _path = null;
       _commands = [];
-      _state = _NavState.idle;
-      _statusText = 'Destination set. Tap FIND PATH.';
+      _statusText = 'Current: ($_currentRow, $_currentCol) → ($row, $col)';
     });
   }
 
   // ── A* Path Finding ─────────────────────────────────────────────────────────
 
   void _findPath() {
-    if (!_map.hasStart || _destRow == null) return;
+    if (!_currentSet || _destRow == null) return;
     final path = AStarPathfinder.findPath(
       grid: _map.grid,
-      startRow: _map.startRow!,
-      startCol: _map.startCol!,
+      startRow: _currentRow!,
+      startCol: _currentCol!,
       goalRow: _destRow!,
       goalCol: _destCol!,
     );
@@ -98,7 +234,7 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
       setState(() {
         _path = null;
         _commands = [];
-        _statusText = '❌ No path found! Check for obstacles.';
+        _statusText = 'No path found! Check for obstacles.';
       });
       return;
     }
@@ -111,7 +247,9 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
       _path = path;
       _commands = cmds;
       _state = _NavState.idle;
-      _statusText = '✅ Path found! ${path.length - 1} steps, ${cmds.length} commands. Tap RUN.';
+      _statusText = _selectedPlace != null
+          ? 'Path: ($_currentRow, $_currentCol) → ${_selectedPlace!.name} (${path.length - 1} steps)'
+          : 'Path: ($_currentRow, $_currentCol) → ($_destRow, $_destCol) (${path.length - 1} steps)';
     });
   }
 
@@ -145,7 +283,7 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
           Future.delayed(const Duration(seconds: 15)), // safety timeout
         ]);
         _movementCompleter = null;
-        
+
         // If it was a move, advance path highlight
         if (cmd.startsWith('move:') && mounted) {
           setState(() => _currentPathIdx++);
@@ -192,8 +330,17 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: Text(_map.name, style: theme.textTheme.titleLarge?.copyWith(fontSize: 18)),
+        title: Text(
+          _map.name,
+          style: theme.textTheme.titleLarge?.copyWith(fontSize: 18),
+        ),
         actions: [
+          if (_map.places.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.place_rounded, color: Colors.teal),
+              tooltip: 'Places',
+              onPressed: _showPlaceSelector,
+            ),
           IconButton(
             icon: const Icon(Icons.tune_rounded, color: RoverTheme.primary),
             tooltip: 'Settings',
@@ -227,6 +374,10 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
                     currentPathIdx: _currentPathIdx,
                     destRow: _destRow,
                     destCol: _destCol,
+                    curRow: _currentRow,
+                    curCol: _currentCol,
+                    currentSet: _currentSet,
+                    currentHeading: _currentHeading,
                   ),
                 ),
               ),
@@ -260,32 +411,57 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
       duration: const Duration(milliseconds: 300),
       margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
-      child: Row(children: [
-        if (_state == _NavState.running)
-          const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: RoverTheme.primary))
-        else
-          Icon(
-            _state == _NavState.done ? Icons.check_circle_rounded : Icons.info_outline_rounded,
-            size: 16,
-            color: _state == _NavState.done ? Colors.green : RoverTheme.primary,
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          if (_state == _NavState.running)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: RoverTheme.primary,
+              ),
+            )
+          else
+            Icon(
+              _state == _NavState.done
+                  ? Icons.check_circle_rounded
+                  : Icons.info_outline_rounded,
+              size: 16,
+              color: _state == _NavState.done
+                  ? Colors.green
+                  : RoverTheme.primary,
+            ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _statusText,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
           ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(_statusText, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: connected ? Colors.green.withOpacity(0.15) : Colors.red.withOpacity(0.15),
-            borderRadius: BorderRadius.circular(8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: connected
+                  ? Colors.green.withOpacity(0.15)
+                  : Colors.red.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              connected ? 'MQTT ✓' : 'NO MQTT',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: connected ? Colors.green : Colors.red,
+              ),
+            ),
           ),
-          child: Text(
-            connected ? 'MQTT ✓' : 'NO MQTT',
-            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: connected ? Colors.green : Colors.red),
-          ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
@@ -299,7 +475,8 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
         separatorBuilder: (_, __) => const SizedBox(width: 6),
         itemBuilder: (_, i) {
           final cmd = _commands[i];
-          final isActive = i == _currentCommandIdx && _state == _NavState.running;
+          final isActive =
+              i == _currentCommandIdx && _state == _NavState.running;
           final isDone = i < _currentCommandIdx || _state == _NavState.done;
           return AnimatedContainer(
             duration: const Duration(milliseconds: 200),
@@ -308,17 +485,27 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
               color: isActive
                   ? RoverTheme.primary.withOpacity(0.3)
                   : isDone
-                      ? Colors.green.withOpacity(0.2)
-                      : RoverTheme.surfaceContainerHighest,
+                  ? Colors.green.withOpacity(0.2)
+                  : RoverTheme.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(8),
-              border: isActive ? Border.all(color: RoverTheme.primary, width: 1.5) : null,
+              border: isActive
+                  ? Border.all(color: RoverTheme.primary, width: 1.5)
+                  : null,
             ),
             child: Text(
-              cmd.startsWith('move:') ? '→ ${cmd.substring(5)}cm' : cmd == 'left90' ? '↺' : '↻',
+              cmd.startsWith('move:')
+                  ? '→ ${cmd.substring(5)}cm'
+                  : cmd == 'left90'
+                  ? '↺'
+                  : '↻',
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
-                color: isActive ? RoverTheme.primary : isDone ? Colors.green : RoverTheme.secondary,
+                color: isActive
+                    ? RoverTheme.primary
+                    : isDone
+                    ? Colors.green
+                    : RoverTheme.secondary,
               ),
             ),
           );
@@ -331,86 +518,98 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
       decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: RoverTheme.outlineVariant, width: 0.5)),
-      ),
-      child: Row(children: [
-        // Manual Turn Left
-        Container(
-          decoration: BoxDecoration(
-            color: RoverTheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: IconButton(
-            onPressed: (_isConnected && _state != _NavState.running) ? () => _manualTurn(true) : null,
-            icon: const Icon(Icons.rotate_left_rounded),
-            color: RoverTheme.primary,
-            tooltip: 'Turn Left 90°',
-          ),
+        border: Border(
+          top: BorderSide(color: RoverTheme.outlineVariant, width: 0.5),
         ),
-        const SizedBox(width: 8),
-        
-        // Find Path button
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: (_destRow != null && _map.hasStart && _state != _NavState.running)
-                ? _findPath
-                : null,
-            icon: const Icon(Icons.route_rounded, size: 18),
-            label: const Text('PATH', style: TextStyle(fontSize: 12)),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: RoverTheme.primary,
-              side: const BorderSide(color: RoverTheme.primary),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: RoverTheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IconButton(
+              onPressed: (_isConnected && _state != _NavState.running)
+                  ? () => _manualTurn(true)
+                  : null,
+              icon: const Icon(Icons.rotate_left_rounded),
+              color: RoverTheme.primary,
+              tooltip: 'Turn Left 90°',
             ),
           ),
-        ),
-        const SizedBox(width: 8),
-        
-        // RUN / STOP button
-        Expanded(
-          child: _state == _NavState.running
-              ? ElevatedButton.icon(
-                  onPressed: _stop,
-                  icon: const Icon(Icons.stop_rounded, size: 18),
-                  label: const Text('STOP', style: TextStyle(fontSize: 12)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                )
-              : ElevatedButton.icon(
-                  onPressed: (_path != null && _path!.isNotEmpty && _isConnected && _state != _NavState.running)
-                      ? _runPath
-                      : null,
-                  icon: const Icon(Icons.rocket_launch_rounded, size: 18),
-                  label: const Text('RUN', style: TextStyle(fontSize: 12)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: RoverTheme.primary,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed:
+                  (_destRow != null &&
+                      _map.hasStart &&
+                      _state != _NavState.running)
+                  ? _findPath
+                  : null,
+              icon: const Icon(Icons.route_rounded, size: 18),
+              label: const Text('PATH', style: TextStyle(fontSize: 12)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: RoverTheme.primary,
+                side: const BorderSide(color: RoverTheme.primary),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
                 ),
-        ),
-        
-        const SizedBox(width: 8),
-        // Manual Turn Right
-        Container(
-          decoration: BoxDecoration(
-            color: RoverTheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(12),
+              ),
+            ),
           ),
-          child: IconButton(
-            onPressed: (_isConnected && _state != _NavState.running) ? () => _manualTurn(false) : null,
-            icon: const Icon(Icons.rotate_right_rounded),
-            color: RoverTheme.primary,
-            tooltip: 'Turn Right 90°',
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed:
+                  (_destRow != null &&
+                      _map.hasStart &&
+                      _state != _NavState.running &&
+                      _path != null)
+                  ? () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => LiveNavigationScreen(
+                            map: _map,
+                            destRow: _destRow!,
+                            destCol: _destCol!,
+                            destinationName: _selectedPlace?.name,
+                          ),
+                        ),
+                      );
+                    }
+                  : null,
+              icon: const Icon(Icons.navigation_rounded, size: 18),
+              label: const Text('GO', style: TextStyle(fontSize: 12)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.teal,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
           ),
-        ),
-      ]),
+          const SizedBox(width: 8),
+          Container(
+            decoration: BoxDecoration(
+              color: RoverTheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IconButton(
+              onPressed: (_isConnected && _state != _NavState.running)
+                  ? () => _manualTurn(false)
+                  : null,
+              icon: const Icon(Icons.rotate_right_rounded),
+              color: RoverTheme.primary,
+              tooltip: 'Turn Right 90°',
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -418,41 +617,68 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: RoverTheme.surfaceContainerHigh,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (_) => StatefulBuilder(
         builder: (ctx, setBS) => Padding(
           padding: const EdgeInsets.all(20),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('Navigation Settings', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 20),
-            Row(children: [
-              const Icon(Icons.rotate_right_rounded, color: RoverTheme.primary),
-              const SizedBox(width: 8),
-              const Expanded(child: Text('Turn Duration (90°)', style: TextStyle(fontWeight: FontWeight.w600))),
-              Text('$_turnDurationMs ms', style: const TextStyle(color: RoverTheme.primary, fontWeight: FontWeight.bold)),
-            ]),
-            Slider(
-              value: _turnDurationMs.toDouble(),
-              min: 300,
-              max: 1500,
-              divisions: 24,
-              label: '$_turnDurationMs ms',
-              activeColor: RoverTheme.primary,
-              onChanged: (v) => setBS(() {
-                _turnDurationMs = v.round();
-                if (mounted) setState(() {});
-              }),
-            ),
-            const SizedBox(height: 4),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-              child: const Text(
-                '⚠  Adjust turn duration until 90° turns are accurate for your rover.',
-                style: TextStyle(fontSize: 12, color: Colors.orange),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Navigation Settings',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
-            ),
-          ]),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.rotate_right_rounded,
+                    color: RoverTheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Turn Duration (90°)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Text(
+                    '$_turnDurationMs ms',
+                    style: const TextStyle(
+                      color: RoverTheme.primary,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              Slider(
+                value: _turnDurationMs.toDouble(),
+                min: 300,
+                max: 1500,
+                divisions: 24,
+                label: '$_turnDurationMs ms',
+                activeColor: RoverTheme.primary,
+                onChanged: (v) => setBS(() {
+                  _turnDurationMs = v.round();
+                  if (mounted) setState(() {});
+                }),
+              ),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  '⚠  Adjust turn duration until 90° turns are accurate for your rover.',
+                  style: TextStyle(fontSize: 12, color: Colors.orange),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -468,6 +694,10 @@ class _NavGridPainter extends CustomPainter {
   final int currentPathIdx;
   final int? destRow;
   final int? destCol;
+  final int? curRow;
+  final int? curCol;
+  final bool currentSet;
+  final double currentHeading;
 
   _NavGridPainter({
     required this.map,
@@ -476,12 +706,17 @@ class _NavGridPainter extends CustomPainter {
     required this.currentPathIdx,
     this.destRow,
     this.destCol,
+    this.curRow,
+    this.curCol,
+    required this.currentSet,
+    required this.currentHeading,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final wallPaint = Paint()..color = const Color(0xFF8B4513).withOpacity(0.85);
-    final emptyPaint = Paint()..color = const Color(0xFF1E1E2E);
+    final wallPaint = Paint()
+      ..color = const Color(0xFF8B4513).withOpacity(0.85);
+    final emptyPaint = Paint()..color = RoverTheme.surfaceContainer;
     final gridLinePaint = Paint()
       ..color = Colors.white.withOpacity(0.06)
       ..strokeWidth = 0.5
@@ -505,42 +740,103 @@ class _NavGridPainter extends CustomPainter {
           ..color = visited
               ? Colors.green.withOpacity(0.6)
               : RoverTheme.primary.withOpacity(0.35);
-        final rect = Rect.fromLTWH(cell.col * cellPx + 3, cell.row * cellPx + 3, cellPx - 6, cellPx - 6);
-        canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(4)), pathPaint);
+        final rect = Rect.fromLTWH(
+          cell.col * cellPx + 3,
+          cell.row * cellPx + 3,
+          cellPx - 6,
+          cellPx - 6,
+        );
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(rect, const Radius.circular(4)),
+          pathPaint,
+        );
       }
     }
 
     // Draw destination
     if (destRow != null && destCol != null) {
       final destPaint = Paint()..color = Colors.greenAccent.shade700;
-      final rect = Rect.fromLTWH(destCol! * cellPx + 2, destRow! * cellPx + 2, cellPx - 4, cellPx - 4);
-      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(6)), destPaint);
+      final rect = Rect.fromLTWH(
+        destCol! * cellPx + 2,
+        destRow! * cellPx + 2,
+        cellPx - 4,
+        cellPx - 4,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(6)),
+        destPaint,
+      );
       _drawText(canvas, '🏁', destCol! * cellPx, destRow! * cellPx, cellPx);
     }
 
-    // Draw rover start
-    if (map.hasStart) {
+    // Draw current position (rover location)
+    if (currentSet && curRow != null && curCol != null) {
+      final curPaint = Paint()..color = Colors.orange;
+      final curRect = Rect.fromLTWH(
+        curCol! * cellPx + 2,
+        curRow! * cellPx + 2,
+        cellPx - 4,
+        cellPx - 4,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(curRect, const Radius.circular(6)),
+        curPaint,
+      );
+      _drawText(canvas, '🤖', curCol! * cellPx, curRow! * cellPx, cellPx);
+    }
+
+    // Draw map start (as fallback reference)
+    if (map.hasStart && !currentSet) {
       final sr = map.startRow!;
       final sc = map.startCol!;
       // If rover has moved, show at current path position
-      final roverIdx = currentPathIdx < (path?.length ?? 0) ? currentPathIdx : 0;
-      final roverCell = (path != null && path!.isNotEmpty && roverIdx < path!.length)
+      final roverIdx = currentPathIdx < (path?.length ?? 0)
+          ? currentPathIdx
+          : 0;
+      final roverCell =
+          (path != null && path!.isNotEmpty && roverIdx < path!.length)
           ? path![roverIdx]
           : PathCell(sr, sc);
 
       final roverPaint = Paint()..color = Colors.orange;
-      final roverRect = Rect.fromLTWH(roverCell.col * cellPx + 2, roverCell.row * cellPx + 2, cellPx - 4, cellPx - 4);
-      canvas.drawRRect(RRect.fromRectAndRadius(roverRect, const Radius.circular(6)), roverPaint);
-      _drawText(canvas, map.startDirection.arrow, roverCell.col * cellPx, roverCell.row * cellPx, cellPx);
+      final roverRect = Rect.fromLTWH(
+        roverCell.col * cellPx + 2,
+        roverCell.row * cellPx + 2,
+        cellPx - 4,
+        cellPx - 4,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(roverRect, const Radius.circular(6)),
+        roverPaint,
+      );
+      // Draw rover with real heading from gyroscope
+      final headingStr = currentHeading.toStringAsFixed(0);
+      _drawText(
+        canvas,
+        headingStr,
+        roverCell.col * cellPx,
+        roverCell.row * cellPx,
+        cellPx,
+      );
     }
   }
 
   void _drawText(Canvas canvas, String text, double x, double y, double size) {
     final tp = TextPainter(
-      text: TextSpan(text: text, style: TextStyle(color: Colors.white, fontSize: size * 0.5, fontWeight: FontWeight.bold)),
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size * 0.5,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
       textDirection: TextDirection.ltr,
     )..layout();
-    tp.paint(canvas, Offset(x + (size - tp.width) / 2, y + (size - tp.height) / 2));
+    tp.paint(
+      canvas,
+      Offset(x + (size - tp.width) / 2, y + (size - tp.height) / 2),
+    );
   }
 
   @override
@@ -548,5 +844,6 @@ class _NavGridPainter extends CustomPainter {
       old.path != path ||
       old.currentPathIdx != currentPathIdx ||
       old.destRow != destRow ||
-      old.destCol != destCol;
+      old.destCol != destCol ||
+      old.currentHeading != currentHeading;
 }

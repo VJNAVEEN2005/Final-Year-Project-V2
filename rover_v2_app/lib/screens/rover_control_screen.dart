@@ -22,6 +22,7 @@ class _RoverControlScreenState extends State<RoverControlScreen>
   // ─── Telemetry ────────────────────────────────────────────────────────────
   double _obstacleDistCm = 0;
   bool _obstacleDetected = false;
+  double _currentYaw = 0;
 
   // ─── Joystick ─────────────────────────────────────────────────────────────
   static const double _joystickRadius = 120.0; // outer circle radius
@@ -105,6 +106,9 @@ class _RoverControlScreenState extends State<RoverControlScreen>
         spd = double.tryParse(part.substring(4));
       } else if (part.startsWith('rpm:')) {
         rpm = double.tryParse(part.substring(4));
+      } else if (part.startsWith('yaw:')) {
+        final yaw = double.tryParse(part.substring(4));
+        if (yaw != null) _currentYaw = yaw;
       }
     }
     setState(() {
@@ -130,10 +134,12 @@ class _RoverControlScreenState extends State<RoverControlScreen>
   String _directionFromOffset(Offset offset) {
     if (offset.distance < _deadZone) return 'stop';
     final angle = atan2(offset.dy, offset.dx) * 180 / pi;
-    if (angle >= -60 && angle <= 60) return 'right';
-    if (angle > 60 && angle < 120) return 'backward';
-    if (angle >= 120 || angle <= -120) return 'left';
-    return 'forward';
+    // Joystick: up=forward, down=backward, left=turn left, right=turn right
+    if (angle > -135 && angle < -45) return 'forward';
+    if (angle >= -45 && angle <= 45) return 'right';
+    if (angle > 45 && angle < 135) return 'backward';
+    if (angle >= 135 || angle <= -135) return 'left';
+    return 'stop';
   }
 
   String _bearingFromOffset(Offset offset) {
@@ -180,8 +186,22 @@ class _RoverControlScreenState extends State<RoverControlScreen>
 
   Future<void> _turn90(bool isLeft) async {
     if (!_isConnected) return;
+    
     final cmd = isLeft ? 'left90' : 'right90';
     _mqtt.publish(cmd);
+    
+    final completer = Completer<void>();
+    StreamSubscription? doneSub = _mqtt.doneStream.listen((_) {
+      if (!completer.isCompleted) completer.complete();
+    });
+    
+    await Future.any([
+      completer.future,
+      Future.delayed(const Duration(milliseconds: 3500)),
+    ]);
+    doneSub?.cancel();
+    
+    _mqtt.publish('stop');
   }
 
 

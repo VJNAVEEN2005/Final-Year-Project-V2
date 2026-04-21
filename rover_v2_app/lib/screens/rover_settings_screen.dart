@@ -1,8 +1,94 @@
 import 'package:flutter/material.dart';
 import '../theme/rover_theme.dart';
+import '../services/mqtt_service.dart';
 
-class RoverSettingsScreen extends StatelessWidget {
+class RoverSettingsScreen extends StatefulWidget {
   const RoverSettingsScreen({super.key});
+
+  @override
+  State<RoverSettingsScreen> createState() => _RoverSettingsScreenState();
+}
+
+class _RoverSettingsScreenState extends State<RoverSettingsScreen> {
+  double _speedLimit = 1.5;
+
+  void _showSpeedLimiterDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Speed Limiter'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('${_speedLimit.toStringAsFixed(1)} m/s', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            Slider(
+              value: _speedLimit,
+              min: 0.5,
+              max: 3.0,
+              divisions: 25,
+              onChanged: (value) => setState(() => _speedLimit = value),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              setState(() => _speedLimit = 1.5);
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Speed limit reset to 1.5 m/s')),
+              );
+            },
+            child: const Text('Reset'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Speed limit set to ${_speedLimit.toStringAsFixed(1)} m/s')),
+              );
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _testConnection(BuildContext context) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Testing connection...')),
+    );
+    final mqtt = MqttService.instance;
+    if (mqtt.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Connection successful!'), backgroundColor: Colors.green),
+      );
+    } else {
+      await mqtt.connect();
+      await Future.delayed(const Duration(seconds: 2));
+      if (mqtt.isConnected) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Connection successful!'), backgroundColor: Colors.green),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Connection failed'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  void _resetToDefault(BuildContext context) {
+    setState(() => _speedLimit = 1.5);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Services reset to default')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -19,12 +105,7 @@ class RoverSettingsScreen extends StatelessWidget {
             Text('Rover App', style: theme.textTheme.titleLarge?.copyWith(fontSize: 20)),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.account_circle_outlined, color: RoverTheme.secondary),
-            onPressed: () {},
-          ),
-        ],
+        actions: const [],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
@@ -41,16 +122,6 @@ class RoverSettingsScreen extends StatelessWidget {
             _buildSectionHeader('CONNECTION SETTINGS'),
             _buildSettingsGroup([
               _buildSettingItem(
-                label: 'IP address',
-                subLabel: 'Primary rover control host',
-                trailing: const Text('192.168.1.42', style: TextStyle(fontFamily: 'monospace', fontSize: 13, color: RoverTheme.onSurface)),
-              ),
-              _buildSettingItem(
-                label: 'Port',
-                subLabel: 'WebSocket communication port',
-                trailing: const Text('8080', style: TextStyle(fontFamily: 'monospace', fontSize: 13, color: RoverTheme.onSurface)),
-              ),
-              _buildSettingItem(
                 label: 'SSL Encryption',
                 subLabel: 'Secure the telemetry stream',
                 trailing: Switch(
@@ -60,83 +131,36 @@ class RoverSettingsScreen extends StatelessWidget {
                   activeTrackColor: RoverTheme.primaryContainer,
                 ),
               ),
+              _buildSettingItem(
+                label: 'Connection Test',
+                subLabel: 'Test MQTT broker connection',
+                trailing: const Icon(Icons.chevron_right, color: RoverTheme.secondary),
+                onTap: () => _testConnection(context),
+              ),
+              _buildSettingItem(
+                label: 'Reset to Default',
+                subLabel: 'Reset services to default',
+                trailing: const Icon(Icons.restart_alt, color: RoverTheme.secondary),
+                onTap: () => _resetToDefault(context),
+              ),
             ]),
             const SizedBox(height: 32),
             _buildSectionHeader('ROVER CONFIGURATION'),
             _buildSettingsGroup([
               _buildSettingItem(
-                label: 'Speed Limit',
-                subLabel: 'Maximum operational velocity (m/s)',
-                trailing: const Row(
+                label: 'Speed Limiter',
+                subLabel: 'Maximum operational velocity',
+                trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('1.5', style: TextStyle(fontWeight: FontWeight.bold, color: RoverTheme.primary)),
-                    SizedBox(width: 8),
-                    Icon(Icons.speed, size: 16, color: RoverTheme.secondary),
+                    Text(_speedLimit.toStringAsFixed(1), style: const TextStyle(fontWeight: FontWeight.bold, color: RoverTheme.primary)),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.speed, size: 16, color: RoverTheme.secondary),
                   ],
                 ),
-              ),
-              _buildSettingItem(
-                label: 'Camera Resolution',
-                subLabel: 'Live feed visual quality',
-                trailing: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('1080p (60fps)', style: TextStyle(fontSize: 13, color: RoverTheme.onSurface)),
-                    SizedBox(width: 4),
-                    Icon(Icons.expand_more, size: 16, color: RoverTheme.secondary),
-                  ],
-                ),
-              ),
-              _buildSettingItem(
-                label: 'Auto-Night Vision',
-                subLabel: 'Engage IR filter in low light',
-                trailing: Switch(
-                  value: false,
-                  onChanged: (v) {},
-                ),
+                onTap: () => _showSpeedLimiterDialog(context),
               ),
             ]),
-            const SizedBox(height: 32),
-            // Hardware Visual Card
-            Container(
-              height: 200,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                image: const DecorationImage(
-                  image: NetworkImage(
-                    'https://lh3.googleusercontent.com/aida-public/AB6AXuCEakGS-ih6KmAo0GBJbr9Ljc7ieOShrv3QrIQTBzNUpDerNkNgDXAb9pt3dSBwkQBhcDUBLNXz9Am12yCwTrUcXJzdUScMwZfE6J6khVmDnujeubqtHKvoNRCd6l4X-7tFtJC5ZnHBNMPMsFWbotlhKDD7x4H8ek6wGIr-0BUywZcIvfhkGAxAxK3yz25hbm80Ei-0ZRXE4U2olW4MAHmZg9W1cAKOSnlmyPGSCIHXJG7MKzKeHhYoQdEJ9WZPkxe8PqHDFXjRBhQ',
-                  ),
-                  fit: BoxFit.cover,
-                ),
-              ),
-              child: Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Colors.black.withOpacity(0.6)],
-                  ),
-                ),
-                padding: const EdgeInsets.all(24),
-                child: const Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Hardware Diagnostics',
-                      style: TextStyle(color: Colors.white, fontFamily: 'EB Garamond', fontSize: 24, fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      'SYSTEM HEALTH: OPTIMAL',
-                      style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2),
-                    ),
-                  ],
-                ),
-              ),
-            ),
             const SizedBox(height: 32),
             _buildSectionHeader('ABOUT'),
             _buildSettingsGroup([
@@ -200,29 +224,32 @@ class RoverSettingsScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildSettingItem({required String label, String? subLabel, required Widget trailing}) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: RoverTheme.outlineVariant.withOpacity(0.3), width: 0.5)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: const TextStyle(fontWeight: FontWeight.w600, color: RoverTheme.onSurface)),
-                if (subLabel != null) ...[
-                  const SizedBox(height: 4),
-                  Text(subLabel, style: const TextStyle(fontSize: 12, color: RoverTheme.secondary)),
+  Widget _buildSettingItem({required String label, String? subLabel, required Widget trailing, VoidCallback? onTap}) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: RoverTheme.outlineVariant.withOpacity(0.3), width: 0.5)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: const TextStyle(fontWeight: FontWeight.w600, color: RoverTheme.onSurface)),
+                  if (subLabel != null) ...[
+                    const SizedBox(height: 4),
+                    Text(subLabel, style: const TextStyle(fontSize: 12, color: RoverTheme.secondary)),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
-          trailing,
-        ],
+            trailing,
+          ],
+        ),
       ),
     );
   }

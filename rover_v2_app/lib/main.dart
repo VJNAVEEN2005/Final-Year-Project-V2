@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'providers/map_provider.dart';
 import 'screens/rover_splash_screen.dart';
 import 'screens/rover_status_screen.dart';
 import 'screens/rover_control_screen.dart';
@@ -26,19 +28,22 @@ class RoverApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Rover App',
-      debugShowCheckedModeBanner: false,
-      theme: RoverTheme.lightTheme,
-      home: const RoverSplashScreen(),
-      routes: {
-        '/status': (context) => const RoverStatusScreen(),
-        '/control': (context) => const RoverControlScreen(),
-        '/ai': (context) => const AiAssistantScreen(),
-        '/settings': (context) => const RoverSettingsScreen(),
-        '/maps': (context) => const MapGalleryScreen(),
-        '/scan': (context) => const MapScannerScreen(),
-      },
+    return MultiProvider(
+      providers: [ChangeNotifierProvider(create: (_) => MapProvider())],
+      child: MaterialApp(
+        title: 'Rover App',
+        debugShowCheckedModeBanner: false,
+        theme: RoverTheme.theme,
+        home: const RoverSplashScreen(),
+        routes: {
+          '/status': (context) => const RoverStatusScreen(),
+          '/control': (context) => const RoverControlScreen(),
+          '/ai': (context) => const AiAssistantScreen(),
+          '/settings': (context) => const RoverSettingsScreen(),
+          '/maps': (context) => const MapGalleryScreen(),
+          '/scan': (context) => const MapScannerScreen(),
+        },
+      ),
     );
   }
 }
