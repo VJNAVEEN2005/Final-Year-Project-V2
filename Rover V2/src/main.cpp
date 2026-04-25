@@ -226,6 +226,8 @@ void startTurn(float angle) {
   if (targetYaw < -180) targetYaw += 360;
   
   state = TURNING;
+  turnPID.integral = 0;
+  turnPID.prevError = 0;
   currentCmd = angle > 0 ? "right90" : "left90";
 }
 
@@ -266,6 +268,8 @@ void startForward() {
   currentYaw = lastKnownYaw;
   moveTargetYaw = currentYaw;
   state = MOVING;
+  movePID.integral = 0;
+  movePID.prevError = 0;
   moveMotors(LOW, HIGH, HIGH, LOW);
 }
 
@@ -303,8 +307,9 @@ void handleForward() {
 
   float correction = computePID(movePID, error, dt);
   
-  int left = constrain(targetSpeed - correction, 0, 255);
-  int right = constrain(targetSpeed + correction, 0, 255);
+  // Fix positive feedback: + correction for left, - correction for right
+  int left = constrain(targetSpeed + correction, 0, 255);
+  int right = constrain(targetSpeed - correction, 0, 255);
   
   // Ensure minimum PWM to overcome friction if target is not 0
   if (targetSpeed > 0) {

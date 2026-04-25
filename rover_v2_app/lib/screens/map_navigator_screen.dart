@@ -288,7 +288,7 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
 
         _mqtt.publish(cmd);
         print("Executing: $cmd");
-        
+
         if (cmd.startsWith('move:')) {
           _expectedDoneSignal = 'done';
           // Wait for 'done' signal from encoder feedback
@@ -341,17 +341,17 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
   Future<void> _manualTurn(bool isLeft) async {
     if (_state == _NavState.running || !_isConnected) return;
     setState(() => _state = _NavState.running);
-    
+
     final cmd = isLeft ? 'left90' : 'right90';
     _mqtt.publish(cmd);
-    
+
     _movementCompleter = Completer<void>();
     await Future.any([
       _movementCompleter!.future,
       Future.delayed(const Duration(seconds: 5)),
     ]);
     _movementCompleter = null;
-    
+
     _mqtt.publish('stop');
     if (mounted) setState(() => _state = _NavState.idle);
   }
@@ -704,10 +704,7 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
               const SizedBox(height: 16),
               Row(
                 children: [
-                  const Icon(
-                    Icons.speed_rounded,
-                    color: RoverTheme.secondary,
-                  ),
+                  const Icon(Icons.speed_rounded, color: RoverTheme.secondary),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(

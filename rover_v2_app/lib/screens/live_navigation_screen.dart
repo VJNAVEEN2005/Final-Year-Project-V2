@@ -52,7 +52,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   bool _obstacleDetected = false;
   double _obstacleDistCm = 999.0;
   String _expectedDoneSignal = 'done';
-  
+
   double _currentYaw = 0;
 
   static const double _cellPx = 40.0;
@@ -65,7 +65,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   late Animation<double> _pulseAnimation;
   late AnimationController _roverMoveController;
   late Animation<double> _roverMoveAnimation;
-  
+
   // ignore: unused_field
   double _roverAnimRow = 0;
   // ignore: unused_field
@@ -119,12 +119,16 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   }
 
   void _updateRoverPosition() {
-    if (_path != null && _currentPathIdx > 0 && _currentPathIdx < _path!.length) {
+    if (_path != null &&
+        _currentPathIdx > 0 &&
+        _currentPathIdx < _path!.length) {
       final prev = _path![_currentPathIdx - 1];
       final curr = _path![_currentPathIdx];
       setState(() {
-        _roverAnimRow = prev.row + (curr.row - prev.row) * _roverMoveAnimation.value;
-        _roverAnimCol = prev.col + (curr.col - prev.col) * _roverMoveAnimation.value;
+        _roverAnimRow =
+            prev.row + (curr.row - prev.row) * _roverMoveAnimation.value;
+        _roverAnimCol =
+            prev.col + (curr.col - prev.col) * _roverMoveAnimation.value;
       });
     }
   }
@@ -134,13 +138,13 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       _movementCompleter?.complete();
       return;
     }
-    
+
     if (data == 'obstacle_detected') {
       _obstacleDetected = true;
       _movementCompleter?.complete();
       return;
     }
-    
+
     // Telemetry is a comma-separated string: "dist:X,obs:X,spd:X,rpm:X,yaw:X"
     // Must split before checking individual fields.
     for (final part in data.split(',')) {
@@ -150,23 +154,26 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
           _obstacleDistCm = obs;
           final wasDetected = _obstacleDetected;
           _obstacleDetected = obs > 0 && obs < 10;
-          
-          if (_obstacleDetected && !wasDetected && _state == _NavState.running) {
+
+          if (_obstacleDetected &&
+              !wasDetected &&
+              _state == _NavState.running) {
             _handleObstacle();
           }
         }
       } else if (part.startsWith('yaw:')) {
         final yaw = double.tryParse(part.substring(4));
         if (yaw != null) {
-          if (mounted) setState(() {
-            _currentYaw = yaw;
-            _currentDirectionIndex = _yawToDirection(yaw);
-          });
+          if (mounted)
+            setState(() {
+              _currentYaw = yaw;
+              _currentDirectionIndex = _yawToDirection(yaw);
+            });
         }
       }
     }
   }
-  
+
   int _yawToDirection(double yaw) {
     final normalized = ((yaw + 180) % 360 + 360) % 360;
     if (normalized >= 315 || normalized < 45) return 0;
@@ -174,38 +181,45 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
     if (normalized >= 135 && normalized < 225) return 2;
     return 3;
   }
-  
+
   void _handleObstacle() {
     _movementCompleter?.complete();
     _mqtt.publish('stop');
-    
+
     setState(() {
       _statusText = 'Obstacle detected! Remapping...';
     });
-    
+
     Future.delayed(const Duration(milliseconds: 500), () {
       _recalculatePath();
     });
   }
-  
+
   void _recalculatePath() {
     int obsRow = _currentRow;
     int obsCol = _currentCol;
-    
+
     if (_path != null && _currentPathIdx + 1 < _path!.length) {
-       obsRow = _path![_currentPathIdx + 1].row;
-       obsCol = _path![_currentPathIdx + 1].col;
+      obsRow = _path![_currentPathIdx + 1].row;
+      obsCol = _path![_currentPathIdx + 1].col;
     } else {
-       if (_currentDirectionIndex == 0) obsRow--;
-       else if (_currentDirectionIndex == 1) obsCol++;
-       else if (_currentDirectionIndex == 2) obsRow++;
-       else if (_currentDirectionIndex == 3) obsCol--;
+      if (_currentDirectionIndex == 0)
+        obsRow--;
+      else if (_currentDirectionIndex == 1)
+        obsCol++;
+      else if (_currentDirectionIndex == 2)
+        obsRow++;
+      else if (_currentDirectionIndex == 3)
+        obsCol--;
     }
-    
-    if (obsRow >= 0 && obsRow < _map.rows && obsCol >= 0 && obsCol < _map.cols) {
+
+    if (obsRow >= 0 &&
+        obsRow < _map.rows &&
+        obsCol >= 0 &&
+        obsCol < _map.cols) {
       _map.grid[obsRow][obsCol] = 1;
     }
-    
+
     _obstacleDetected = false;
 
     final newPath = AStarPathfinder.findPath(
@@ -215,7 +229,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       goalRow: widget.destRow,
       goalCol: widget.destCol,
     );
-    
+
     if (newPath == null || newPath.isEmpty) {
       setState(() {
         _state = _NavState.error;
@@ -223,7 +237,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       });
       return;
     }
-    
+
     setState(() {
       _path = newPath;
       _commands = AStarPathfinder.pathToCommands(
@@ -235,10 +249,10 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       _currentCommandIdx = 0;
       _statusText = 'Path recalculated! Resuming...';
     });
-    
+
     _resumeNavigation();
   }
-  
+
   void _resumeNavigation() async {
     _obstacleDetected = false;
     if (_commands.isEmpty) {
@@ -250,26 +264,26 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       });
       return;
     }
-    
+
     setState(() {
       _state = _NavState.running;
     });
-    
+
     for (int i = 0; i < _commands.length; i++) {
       if (_cancelRequested) break;
       if (_obstacleDetected) {
         _handleObstacle();
         return;
       }
-      
+
       final cmd = _commands[i];
-      
+
       setState(() {
         _currentCommandIdx = i;
         _statusText = 'Step ${i + 1}/${_commands.length}: $cmd';
       });
-      
-if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
+
+      if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
         // Null the completer first and wait briefly to drain any late 'done'
         // MQTT packets from the previous command that may still be in-flight.
         _movementCompleter = null;
@@ -282,7 +296,7 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
           await Future.delayed(const Duration(milliseconds: 50));
           _movementCompleter = Completer<void>();
           _mqtt.publish(cmd);
-          
+
           await Future.any([
             _movementCompleter!.future,
             Future.delayed(const Duration(seconds: 20)),
@@ -305,7 +319,7 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
           _expectedDoneSignal = 'turn_done';
           _movementCompleter = Completer<void>();
           _mqtt.publish(cmd);
-          
+
           await Future.any([
             _movementCompleter!.future,
             Future.delayed(const Duration(seconds: 8)),
@@ -325,7 +339,7 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
 
       if (_cancelRequested) break;
     }
-    
+
     _mqtt.publish('stop');
     if (mounted) {
       setState(() {
@@ -369,10 +383,10 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
 
   Future<void> _startNavigation() async {
     if (_commands.isEmpty || !_isConnected) return;
-    
+
     _mqtt.publish('speed:${_motorSpeed.round()}');
     await Future.delayed(const Duration(milliseconds: 100));
-    
+
     _pathAnimationController.forward(from: 0.0);
     setState(() {
       _state = _NavState.running;
@@ -389,7 +403,7 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
         _handleObstacle();
         return;
       }
-      
+
       final cmd = _commands[i];
 
       setState(() {
@@ -397,7 +411,7 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
         _statusText = 'Step ${i + 1}/${_commands.length}: $cmd';
       });
 
-if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
+      if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
         // Null the completer first and wait briefly to drain any late 'done'
         // MQTT packets from the previous command that may still be in-flight.
         _movementCompleter = null;
@@ -410,7 +424,7 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
           await Future.delayed(const Duration(milliseconds: 50));
           _movementCompleter = Completer<void>();
           _mqtt.publish(cmd);
-          
+
           await Future.any([
             _movementCompleter!.future,
             Future.delayed(const Duration(seconds: 20)),
@@ -433,7 +447,7 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
           _expectedDoneSignal = 'turn_done';
           _movementCompleter = Completer<void>();
           _mqtt.publish(cmd);
-          
+
           await Future.any([
             _movementCompleter!.future,
             Future.delayed(const Duration(seconds: 8)),
@@ -453,7 +467,7 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
 
       if (_cancelRequested) break;
     }
-    
+
     _mqtt.publish('stop');
     if (mounted) {
       setState(() {
@@ -687,13 +701,19 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
             height: 40,
             child: Row(
               children: [
-                const Icon(Icons.speed_rounded, size: 16, color: RoverTheme.secondary),
+                const Icon(
+                  Icons.speed_rounded,
+                  size: 16,
+                  color: RoverTheme.secondary,
+                ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: SliderTheme(
                     data: SliderTheme.of(context).copyWith(
                       trackHeight: 4,
-                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 8,
+                      ),
                     ),
                     child: Slider(
                       value: _motorSpeed,
@@ -705,7 +725,10 @@ if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: RoverTheme.primary.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(6),
