@@ -96,7 +96,7 @@ class _RoverStatusScreenState extends State<RoverStatusScreen>
         if (obs != null && mounted) {
           setState(() {
             _obstacleDistCm = obs;
-            _obstacleDetected = obs > 0 && obs < 15;
+            _obstacleDetected = obs > 0 && obs < 10;
           });
         }
       } else if (part.startsWith('dist:')) {

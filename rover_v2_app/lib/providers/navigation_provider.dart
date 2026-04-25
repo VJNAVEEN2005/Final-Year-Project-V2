@@ -138,17 +138,22 @@ class NavigationProvider extends ChangeNotifier {
       _statusText = 'Step ${i + 1}/${_commands.length}: $cmd';
       notifyListeners();
 
-      if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
+      if (cmd.startsWith('move:') || cmd.startsWith('left') || cmd.startsWith('right')) {
         _mqtt.publish(cmd);
-        _movementCompleter = Completer<void>();
-        await Future.any([
-          _movementCompleter!.future,
-          Future.delayed(const Duration(seconds: 15)),
-        ]);
-        _movementCompleter = null;
-
+        
         if (cmd.startsWith('move:')) {
+          _movementCompleter = Completer<void>();
+          await Future.any([
+            _movementCompleter!.future,
+            Future.delayed(const Duration(seconds: 15)),
+          ]);
+          _movementCompleter = null;
           _currentPathIdx++;
+        } else {
+          await Future.delayed(const Duration(milliseconds: 200));
+          _currentDirectionIndex = cmd.startsWith('left')
+              ? (_currentDirectionIndex - 1 + 4) % 4
+              : (_currentDirectionIndex + 1) % 4;
         }
       }
     }

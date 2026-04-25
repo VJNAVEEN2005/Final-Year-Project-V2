@@ -27,7 +27,8 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
   bool _currentSet = false;
 
   // Real-time heading from gyroscope
-  double _currentHeading = 0;
+  double _currentHeading = 0.0;
+  String _expectedDoneSignal = 'done';
 
   // Destination
   int? _destRow, _destCol;
@@ -46,6 +47,7 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
 
   // Settings
   int _turnDurationMs = 700;
+  double _motorSpeed = 200.0;
 
   // MQTT
   final MqttService _mqtt = MqttService.instance;
@@ -76,7 +78,7 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
   }
 
   void _onMqttData(String data) {
-    if (data == 'done') {
+    if (data == _expectedDoneSignal) {
       _movementCompleter?.complete();
       return;
     }
@@ -265,6 +267,11 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
       _statusText = 'Running...';
     });
 
+    _mqtt.publish('speed:${_motorSpeed.round()}');
+    await Future.delayed(const Duration(milliseconds: 50));
+
+    final turnDelayMs = (_turnDurationMs * (100 / _motorSpeed)).round();
+
     for (int i = 0; i < _commands.length; i++) {
       if (_cancelRequested) break;
       final cmd = _commands[i];
@@ -275,18 +282,38 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
       });
 
       if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
-        _mqtt.publish(cmd);
-        // Wait for 'done' signal from encoder feedback
-        _movementCompleter = Completer<void>();
-        await Future.any([
-          _movementCompleter!.future,
-          Future.delayed(const Duration(seconds: 15)), // safety timeout
-        ]);
         _movementCompleter = null;
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (_cancelRequested) break;
 
-        // If it was a move, advance path highlight
-        if (cmd.startsWith('move:') && mounted) {
-          setState(() => _currentPathIdx++);
+        _mqtt.publish(cmd);
+        print("Executing: $cmd");
+        
+        if (cmd.startsWith('move:')) {
+          _expectedDoneSignal = 'done';
+          // Wait for 'done' signal from encoder feedback
+          _movementCompleter = Completer<void>();
+          await Future.any([
+            _movementCompleter!.future,
+            Future.delayed(const Duration(seconds: 15)),
+          ]);
+          _movementCompleter = null;
+          print("Move done");
+
+          if (mounted) {
+            setState(() => _currentPathIdx++);
+          }
+        } else {
+          _expectedDoneSignal = 'turn_done';
+          // Wait for 'turn_done' signal from gyroscope feedback for turns
+          print("Waiting for turn: $cmd");
+          _movementCompleter = Completer<void>();
+          await Future.any([
+            _movementCompleter!.future,
+            Future.delayed(const Duration(seconds: 5)),
+          ]);
+          _movementCompleter = null;
+          print("Turn done");
         }
       }
 
@@ -314,8 +341,17 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
   Future<void> _manualTurn(bool isLeft) async {
     if (_state == _NavState.running || !_isConnected) return;
     setState(() => _state = _NavState.running);
-    _mqtt.publish(isLeft ? 'left' : 'right');
-    await Future.delayed(Duration(milliseconds: _turnDurationMs));
+    
+    final cmd = isLeft ? 'left90' : 'right90';
+    _mqtt.publish(cmd);
+    
+    _movementCompleter = Completer<void>();
+    await Future.any([
+      _movementCompleter!.future,
+      Future.delayed(const Duration(seconds: 5)),
+    ]);
+    _movementCompleter = null;
+    
     _mqtt.publish('stop');
     if (mounted) setState(() => _state = _NavState.idle);
   }
@@ -665,6 +701,41 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
                   if (mounted) setState(() {});
                 }),
               ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.speed_rounded,
+                    color: RoverTheme.secondary,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Motor Speed (PWM)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Text(
+                    '${_motorSpeed.round()}',
+                    style: const TextStyle(
+                      color: RoverTheme.secondary,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              Slider(
+                value: _motorSpeed,
+                min: 50,
+                max: 255,
+                divisions: 41,
+                label: '${_motorSpeed.round()}',
+                activeColor: RoverTheme.secondary,
+                onChanged: (v) => setBS(() {
+                  _motorSpeed = v;
+                  if (mounted) setState(() {});
+                }),
+              ),
               const SizedBox(height: 4),
               Container(
                 padding: const EdgeInsets.all(10),
@@ -673,7 +744,7 @@ class _MapNavigatorScreenState extends State<MapNavigatorScreen> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Text(
-                  '⚠  Adjust turn duration until 90° turns are accurate for your rover.',
+                  '⚠  Adjust motor speed to match joystick control. Turn duration will scale automatically.',
                   style: TextStyle(fontSize: 12, color: Colors.orange),
                 ),
               ),

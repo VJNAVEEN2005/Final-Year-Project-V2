@@ -74,7 +74,7 @@ struct PID {
   float prevError;
 };
 
-PID turnPID = {2.2, 0.0, 0.8, 0, 0};
+PID turnPID = {1.5, 0.0, 0.6, 0, 0};
 PID movePID = {1.8, 0.0, 0.5, 0, 0};
 
 float computePID(PID &pid, float error, float dt) {
@@ -132,6 +132,7 @@ unsigned long lastStatusPub = 0;
 
 float lastKnownYaw = 0;
 bool publishDone = false;
+bool publishTurnDone = false;
 int currentSpeed = 0;
 
 // Telemetry
@@ -163,7 +164,9 @@ float getDistance() {
   digitalWrite(TRIG_PIN, LOW);
   long duration = pulseIn(ECHO_PIN, HIGH, 8000);
   if (duration == 0) return 999;
-  return duration * 0.034 / 2;
+  float dist = duration * 0.034 / 2;
+  if (dist < 2.0) return 999; // Filter out EMI noise spikes
+  return dist;
 }
 
 // ===== MOTOR CONTROL =====
@@ -237,10 +240,12 @@ void handleTurning() {
   if (error > 180) error -= 360;
   if (error < -180) error += 360;
   
-  if (abs(error) < 1.0) {
+  if (abs(error) < 2.0) {
+    Serial.println("Turn done! Error: " + String(error));
     stopAll();
-    publishDone = true;
+    publishTurnDone = true;
     turnPID.integral = 0;
+    Serial.println("publishTurnDone set to true");
     return;
   }
   
@@ -265,11 +270,13 @@ void startForward() {
 }
 
 void handleForward() {
-  // Obstacle check - stop at 5cm
-  if (getDistance() < 5) {
+  // Obstacle check - stop at 10cm using global obstacleDist
+  // This prevents EMI noise from motors triggering false stops via raw getDistance() calls
+  if (obstacleDist < 10 && obstacleDist > 0.1) {
     Serial.println("OBSTACLE DETECTED");
     stopAll();
     targetPulses = 0;
+    mqttClient.publish(topic_data, "obstacle_detected");
     publishDone = true;
     return;
   }
@@ -296,8 +303,14 @@ void handleForward() {
 
   float correction = computePID(movePID, error, dt);
   
-  int left = constrain(targetSpeed - correction, 100, 255);
-  int right = constrain(targetSpeed + correction, 100, 255);
+  int left = constrain(targetSpeed - correction, 0, 255);
+  int right = constrain(targetSpeed + correction, 0, 255);
+  
+  // Ensure minimum PWM to overcome friction if target is not 0
+  if (targetSpeed > 0) {
+    if (left < 130) left = 130;
+    if (right < 130) right = 130;
+  }
   
   ledcWrite(0, left);
   ledcWrite(1, right);
@@ -320,12 +333,16 @@ void mqttCallback(char *topic, byte *payload, unsigned int len) {
     moveMotors(HIGH, LOW, LOW, HIGH);
   }
   else if (msg == "left") {
-    currentCmd = "left";
-    moveMotors(HIGH, LOW, HIGH, LOW);
+    if (currentCmd != "left") {
+      currentCmd = "left";
+      moveMotors(HIGH, LOW, HIGH, LOW);
+    }
   }
   else if (msg == "right") {
-    currentCmd = "right";
-    moveMotors(LOW, HIGH, LOW, HIGH);
+    if (currentCmd != "right") {
+      currentCmd = "right";
+      moveMotors(LOW, HIGH, LOW, HIGH);
+    }
   }
   else if (msg == "stop") {
     stopAll();
@@ -337,16 +354,12 @@ void mqttCallback(char *topic, byte *payload, unsigned int len) {
     startTurn(90);
   }
   else if (msg.startsWith("move:")) {
-    // Custom distance move - non-blocking using state machine
     float d = msg.substring(5).toFloat();
     if (d > 0) {
       encPulseCount = 0;
-      // 20 slots = 40 edges per rev, ~10cm wheel = 0.25 cm per pulse
       targetPulses = (unsigned long)(d / CM_PER_PULSE);
-      state = MOVING;
-      moveMotors(LOW, HIGH, HIGH, LOW);
-      // Store target distance for telemetry
       currentCmd = "move";
+      startForward(); // sets moveTargetYaw and state = MOVING
     }
   }
   else if (msg.startsWith("speed:")) {
@@ -468,11 +481,19 @@ void loop() {
   }
   mqttClient.loop();
 
+  if (publishTurnDone && mqttClient.connected()) {
+    mqttClient.publish(topic_data, "turn_done");
+    Serial.println("TURN_DONE published!");
+    publishTurnDone = false;
+  }
+
   if (publishDone && mqttClient.connected()) {
-    if (obstacleDist < 20) {
+    Serial.println("publishDone is true, publishing done");
+    if (obstacleDist < 10) {
       mqttClient.publish(topic_data, "obstacle_detected");
-    } else if (targetPulses == 0 && state == IDLE) {
+    } else {
       mqttClient.publish(topic_data, "done");
+      Serial.println("DONE published!");
     }
     publishDone = false;
   }

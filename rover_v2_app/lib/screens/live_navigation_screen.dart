@@ -39,7 +39,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   List<String> _commands = [];
   int _currentCommandIdx = 0;
 
-  double _motorSpeed = 100;
+  double _motorSpeed = 200.0;
 
   final MqttService _mqtt = MqttService.instance;
   StreamSubscription<String>? _dataSub;
@@ -49,11 +49,11 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   late int _currentRow;
   late int _currentCol;
   int _currentDirectionIndex = 0;
+  bool _obstacleDetected = false;
+  double _obstacleDistCm = 999.0;
+  String _expectedDoneSignal = 'done';
   
   double _currentYaw = 0;
-  bool _obstacleDetected = false;
-  // ignore: unused_field
-  double _obstacleDistCm = 0;
 
   static const double _cellPx = 40.0;
 
@@ -130,7 +130,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   }
 
   void _onMqttData(String data) {
-    if (data == 'done') {
+    if (data == _expectedDoneSignal) {
       _movementCompleter?.complete();
       return;
     }
@@ -141,26 +141,28 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       return;
     }
     
-    if (data.startsWith('obs:')) {
-      final obs = double.tryParse(data.substring(4));
-      if (obs != null) {
-        _obstacleDistCm = obs;
-        _obstacleDetected = obs > 0 && obs < 20;
-        
-        if (_obstacleDetected && _state == _NavState.running) {
-          _handleObstacle();
+    // Telemetry is a comma-separated string: "dist:X,obs:X,spd:X,rpm:X,yaw:X"
+    // Must split before checking individual fields.
+    for (final part in data.split(',')) {
+      if (part.startsWith('obs:')) {
+        final obs = double.tryParse(part.substring(4));
+        if (obs != null && mounted) {
+          _obstacleDistCm = obs;
+          final wasDetected = _obstacleDetected;
+          _obstacleDetected = obs > 0 && obs < 10;
+          
+          if (_obstacleDetected && !wasDetected && _state == _NavState.running) {
+            _handleObstacle();
+          }
         }
-      }
-      return;
-    }
-    
-    if (data.startsWith('yaw:')) {
-      final yaw = double.tryParse(data.substring(4));
-      if (yaw != null) {
-        setState(() {
-          _currentYaw = yaw;
-          _currentDirectionIndex = _yawToDirection(yaw);
-        });
+      } else if (part.startsWith('yaw:')) {
+        final yaw = double.tryParse(part.substring(4));
+        if (yaw != null) {
+          if (mounted) setState(() {
+            _currentYaw = yaw;
+            _currentDirectionIndex = _yawToDirection(yaw);
+          });
+        }
       }
     }
   }
@@ -187,11 +189,25 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   }
   
   void _recalculatePath() {
-    if (_currentRow >= 0 && _currentRow < _map.rows && 
-        _currentCol >= 0 && _currentCol < _map.cols) {
-      _map.grid[_currentRow][_currentCol] = 1;
+    int obsRow = _currentRow;
+    int obsCol = _currentCol;
+    
+    if (_path != null && _currentPathIdx + 1 < _path!.length) {
+       obsRow = _path![_currentPathIdx + 1].row;
+       obsCol = _path![_currentPathIdx + 1].col;
+    } else {
+       if (_currentDirectionIndex == 0) obsRow--;
+       else if (_currentDirectionIndex == 1) obsCol++;
+       else if (_currentDirectionIndex == 2) obsRow++;
+       else if (_currentDirectionIndex == 3) obsCol--;
     }
     
+    if (obsRow >= 0 && obsRow < _map.rows && obsCol >= 0 && obsCol < _map.cols) {
+      _map.grid[obsRow][obsCol] = 1;
+    }
+    
+    _obstacleDetected = false;
+
     final newPath = AStarPathfinder.findPath(
       grid: _map.grid,
       startRow: _currentRow,
@@ -224,6 +240,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   }
   
   void _resumeNavigation() async {
+    _obstacleDetected = false;
     if (_commands.isEmpty) {
       setState(() {
         _state = _NavState.done;
@@ -252,25 +269,60 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
         _statusText = 'Step ${i + 1}/${_commands.length}: $cmd';
       });
       
-      if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
-        _mqtt.publish(cmd);
-        
-        _movementCompleter = Completer<void>();
-        await Future.any([
-          _movementCompleter!.future,
-          Future.delayed(const Duration(seconds: 20)),
-        ]);
+if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
+        // Null the completer first and wait briefly to drain any late 'done'
+        // MQTT packets from the previous command that may still be in-flight.
         _movementCompleter = null;
-        
-        if (cmd.startsWith('move:') && mounted) {
-          setState(() => _currentPathIdx++);
-          if (_path != null && _currentPathIdx < _path!.length) {
-            _currentRow = _path![_currentPathIdx].row;
-            _currentCol = _path![_currentPathIdx].col;
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (_cancelRequested) break;
+
+        if (cmd.startsWith('move:')) {
+          _expectedDoneSignal = 'done';
+          _mqtt.publish('speed:${_motorSpeed.round()}');
+          await Future.delayed(const Duration(milliseconds: 50));
+          _movementCompleter = Completer<void>();
+          _mqtt.publish(cmd);
+          
+          await Future.any([
+            _movementCompleter!.future,
+            Future.delayed(const Duration(seconds: 20)),
+          ]);
+          _movementCompleter = null;
+
+          if (_obstacleDetected) {
+            _handleObstacle();
+            return;
           }
+
+          if (mounted) {
+            setState(() => _currentPathIdx++);
+            if (_path != null && _currentPathIdx < _path!.length) {
+              _currentRow = _path![_currentPathIdx].row;
+              _currentCol = _path![_currentPathIdx].col;
+            }
+          }
+        } else {
+          _expectedDoneSignal = 'turn_done';
+          _movementCompleter = Completer<void>();
+          _mqtt.publish(cmd);
+          
+          await Future.any([
+            _movementCompleter!.future,
+            Future.delayed(const Duration(seconds: 8)),
+          ]);
+          _movementCompleter = null;
+
+          if (_obstacleDetected) {
+            _handleObstacle();
+            return;
+          }
+
+          _currentDirectionIndex = cmd == 'left90'
+              ? (_currentDirectionIndex - 1 + 4) % 4
+              : (_currentDirectionIndex + 1) % 4;
         }
       }
-      
+
       if (_cancelRequested) break;
     }
     
@@ -345,28 +397,63 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
         _statusText = 'Step ${i + 1}/${_commands.length}: $cmd';
       });
 
-      if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
-        _mqtt.publish(cmd);
-        
-        _movementCompleter = Completer<void>();
-        await Future.any([
-          _movementCompleter!.future,
-          Future.delayed(const Duration(seconds: 20)),
-        ]);
+if (cmd.startsWith('move:') || cmd == 'left90' || cmd == 'right90') {
+        // Null the completer first and wait briefly to drain any late 'done'
+        // MQTT packets from the previous command that may still be in-flight.
         _movementCompleter = null;
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (_cancelRequested) break;
 
-        if (cmd.startsWith('move:') && mounted) {
-          setState(() => _currentPathIdx++);
-          if (_path != null && _currentPathIdx < _path!.length) {
-            _currentRow = _path![_currentPathIdx].row;
-            _currentCol = _path![_currentPathIdx].col;
+        if (cmd.startsWith('move:')) {
+          _expectedDoneSignal = 'done';
+          _mqtt.publish('speed:${_motorSpeed.round()}');
+          await Future.delayed(const Duration(milliseconds: 50));
+          _movementCompleter = Completer<void>();
+          _mqtt.publish(cmd);
+          
+          await Future.any([
+            _movementCompleter!.future,
+            Future.delayed(const Duration(seconds: 20)),
+          ]);
+          _movementCompleter = null;
+
+          if (_obstacleDetected) {
+            _handleObstacle();
+            return;
           }
+
+          if (mounted) {
+            setState(() => _currentPathIdx++);
+            if (_path != null && _currentPathIdx < _path!.length) {
+              _currentRow = _path![_currentPathIdx].row;
+              _currentCol = _path![_currentPathIdx].col;
+            }
+          }
+        } else {
+          _expectedDoneSignal = 'turn_done';
+          _movementCompleter = Completer<void>();
+          _mqtt.publish(cmd);
+          
+          await Future.any([
+            _movementCompleter!.future,
+            Future.delayed(const Duration(seconds: 8)),
+          ]);
+          _movementCompleter = null;
+
+          if (_obstacleDetected) {
+            _handleObstacle();
+            return;
+          }
+
+          _currentDirectionIndex = cmd == 'left90'
+              ? (_currentDirectionIndex - 1 + 4) % 4
+              : (_currentDirectionIndex + 1) % 4;
         }
       }
 
       if (_cancelRequested) break;
     }
-
+    
     _mqtt.publish('stop');
     if (mounted) {
       setState(() {
@@ -809,6 +896,7 @@ class _LiveNavPainter extends CustomPainter {
   bool shouldRepaint(covariant _LiveNavPainter old) =>
       old.currentRow != currentRow ||
       old.currentCol != currentCol ||
+      old.currentDirection != currentDirection ||
       old.currentPathIdx != currentPathIdx ||
       old.path != path;
 }

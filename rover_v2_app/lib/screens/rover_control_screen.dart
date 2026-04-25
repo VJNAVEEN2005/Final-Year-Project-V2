@@ -114,7 +114,7 @@ class _RoverControlScreenState extends State<RoverControlScreen>
     setState(() {
       if (obs != null) {
         _obstacleDistCm = obs;
-        _obstacleDetected = obs > 0 && obs < 15;
+        _obstacleDetected = obs > 0 && obs < 10;
       }
       if (spd != null) _actualSpeed = spd;
       if (rpm != null) _wheelRpm = rpm;
@@ -133,12 +133,13 @@ class _RoverControlScreenState extends State<RoverControlScreen>
 
   String _directionFromOffset(Offset offset) {
     if (offset.distance < _deadZone) return 'stop';
-    final angle = atan2(offset.dy, offset.dx) * 180 / pi;
+    final angle = atan2(-offset.dy, offset.dx) * 180 / pi;
+    // Screen coords: up is negative y, down is positive y
     // Joystick: up=forward, down=backward, left=turn left, right=turn right
-    if (angle > -135 && angle < -45) return 'forward';
-    if (angle >= -45 && angle <= 45) return 'right';
-    if (angle > 45 && angle < 135) return 'backward';
-    if (angle >= 135 || angle <= -135) return 'left';
+    if (angle > -135 && angle < -45) return 'forward';  // up
+    if (angle >= -45 && angle <= 45) return 'right';   // right
+    if (angle > 45 && angle < 135) return 'backward'; // down
+    if (angle >= 135 || angle <= -135) return 'left'; // left
     return 'stop';
   }
 

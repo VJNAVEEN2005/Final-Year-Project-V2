@@ -147,13 +147,13 @@ class AStarPathfinder {
       else requiredDir = 3;                               // West
 
       // Compute minimum turns needed
+      // Use 90 degree turn commands for precise turning
       final diff = (requiredDir - currentDir + 4) % 4;
       if (diff == 1) {
         commands.add('right90');
       } else if (diff == 3) {
         commands.add('left90');
       } else if (diff == 2) {
-        // 180° — two right turns
         commands.add('right90');
         commands.add('right90');
       }
